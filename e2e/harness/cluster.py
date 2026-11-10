@@ -91,7 +91,7 @@ class Cluster:
         return tag
 
     def _start_k3s(self) -> K3SContainer:
-        k3s = K3SContainer(self._k3s_image())
+        k3s = K3SContainer(self._k3s_image(), enable_cgroup_mount=s.K3S_CGROUP_MOUNT)
         k3s.with_command(f"server --disable traefik --disable metrics-server --tls-san={k3s.get_container_host_ip()}")
         k3s.with_network(self.network).with_exposed_ports(s.WEBSERVER_NODEPORT, s.GIT_NODEPORT)
         t = time.time()

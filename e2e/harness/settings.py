@@ -21,6 +21,11 @@ CHART_URL = os.environ.get(
 #   E2E_EXTRA_CA_FILE    PEM bundle k3s' containerd must trust when pulling images
 #   E2E_REGISTRY_MIRROR  e.g. https://mirror.gcr.io, used by k3s for docker.io
 EXTRA_CA_FILE = os.environ.get("E2E_EXTRA_CA_FILE")
+# testcontainers' K3SContainer bind-mounts the host's /sys/fs/cgroup by default. On
+# cgroup-v2 hosts (GitHub's ubuntu-24.04 runners) that breaks every pod: runc
+# can't apply the pod cgroups ("cgroup.procs: no such file or directory"). Leave
+# it off (k3d-style: private cgroup namespace); E2E_K3S_CGROUP_MOUNT=1 restores it.
+K3S_CGROUP_MOUNT = os.environ.get("E2E_K3S_CGROUP_MOUNT", "0") == "1"
 REGISTRY_MIRROR = os.environ.get("E2E_REGISTRY_MIRROR")
 
 # NodePorts published by the k3s container.
