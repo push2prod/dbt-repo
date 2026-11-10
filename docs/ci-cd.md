@@ -144,6 +144,30 @@ Why changes show up fast despite `min_file_process_interval: 600`: with
 any file whose mtime is newer than its last parse. git-sync writes every
 revision fresh.
 
+## Measured once: CI manifests vs. Cosmos running `dbt ls`
+
+A one-off run (not kept in the repo) of the same e2e stress test against the
+old setup: no manifests in the bundle, Cosmos runs `dbt ls` while parsing.
+Each mode ran on its own 4-vCPU GitHub runner:
+
+| | CI manifests | Cosmos `dbt ls` (cache on) | `dbt ls`, cache off |
+|---|---|---|---|
+| all 20 DAGs parsed | ready when Airflow came up | ~580s | ~583s |
+| patches visible after the sync | 58s | never (600s limit) | never |
+| worst parse per DAG file | 20s* | 40s | 60s (import timeout) |
+| fewest DAGs visible under load | 20 | 4 | 0 |
+| failed task instances | 0 | 0 | 35 (0 ran) |
+| scheduler / processor heartbeats | healthy | healthy | healthy |
+
+\* before the parse probe parsed the way Airflow does, and with the DAG
+processor's CPU request cut to 200m in the e2e (now: production's 2 CPUs).
+
+Without manifests the stack stops working, rather than slowing down: DAGs go
+missing as parses hit the import timeout, deploys never become visible, and
+task pods (which re-parse their DAG file) fail. Cosmos' dbt-ls cache only
+helps until project files change, i.e. on every deploy. The standalone DAG
+processor kept the scheduler's heartbeat healthy in every mode.
+
 ## git-sync settings that matter
 
 * `dags.gitSync.ref: deploy`. git-sync v4 (chart ≥ 1.11) reads `ref`, and the
