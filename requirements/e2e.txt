@@ -1,7 +1,9 @@
 # e2e test driver (runs on the CI runner, talks to Docker / k3s / Airflow's REST API).
+# Lower bounds only for libraries Airflow's constraints also pin, so this file can be
+# installed together with requirements/airflow.txt -c <constraints> (lint/mypy job).
 testcontainers[k3s,postgres]==4.15.0
-kubernetes==37.0.2
-requests==2.34.2
+kubernetes>=29
+requests>=2.31
 pyyaml>=6
 pytest>=8
 psycopg2-binary>=2.9

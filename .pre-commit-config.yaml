@@ -1,5 +1,6 @@
 # Same tools and versions as CI (requirements/dev.txt), run from your env:
-#   pip install -r requirements/airflow.txt -r requirements/dev.txt -c <airflow constraints>
+#   pip install -r requirements/airflow.txt -c <airflow constraints>
+#   pip install -r requirements/e2e.txt -r requirements/dev.txt
 #   pre-commit install
 repos:
   - repo: local

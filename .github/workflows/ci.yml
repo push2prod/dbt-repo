@@ -45,7 +45,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: "${{ env.PYTHON_VERSION }}", cache: pip, cache-dependency-path: requirements/*.txt}
-      - run: pip install -q -r requirements/airflow.txt -r requirements/e2e.txt -r requirements/dev.txt -c "$AIRFLOW_CONSTRAINTS"
+      # Airflow side with its constraints; test driver + dev tools on top (the
+      # constraints pin older ruff/mypy/pre-commit/pyyaml than these need).
+      - run: |
+          pip install -q -r requirements/airflow.txt -c "$AIRFLOW_CONSTRAINTS"
+          pip install -q -r requirements/e2e.txt -r requirements/dev.txt
       - run: ruff check .
       - run: ruff format --check .
       - run: mypy
