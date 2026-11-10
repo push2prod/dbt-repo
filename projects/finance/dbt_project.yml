@@ -12,8 +12,4 @@ clean-targets: ["target", "dbt_packages"]
 
 models:
   finance:
-    staging:
-      +materialized: view
-      +tags: ["staging"]
-    marts:
-      +materialized: table
+    +materialized: table

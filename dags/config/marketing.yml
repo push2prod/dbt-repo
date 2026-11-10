@@ -1,16 +1,18 @@
+# DAGs for the marketing project. Each domain is owned by exactly one DAG, so all DAGs
+# can run at the same time without two runs rebuilding the same table.
 defaults:
   tags: [dbt, marketing]
 dags:
-  - dag_id: dbt_marketing_daily
-    schedule: "0 5 * * *"
-    select: ["path:models/staging", "tag:daily"]
-  - dag_id: dbt_marketing_attribution
-    schedule: "@hourly"
-    select: ["path:models/marts/attribution+"]
-    exclude: ["last_touch"]
   - dag_id: dbt_marketing_audiences
-    schedule: "20 5 * * *"
+    schedule: "0 4 * * *"
     select: ["tag:audiences"]
   - dag_id: dbt_marketing_content
-    schedule: "40 5 * * *"
-    select: ["tag:content"]
+    schedule: "15 4 * * *"
+    select: ["path:models/content"]
+  - dag_id: dbt_marketing_campaigns
+    schedule: "30 4 * * *"
+    select: ["+campaigns_summary"]
+  - dag_id: dbt_marketing_attribution
+    schedule: "45 4 * * *"
+    select: ["tag:attribution"]
+    exclude: ["tag:deprecated"]

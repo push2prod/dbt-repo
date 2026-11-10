@@ -1,16 +1,18 @@
+# DAGs for the finance project. Each domain is owned by exactly one DAG, so all DAGs
+# can run at the same time without two runs rebuilding the same table.
 defaults:
   tags: [dbt, finance]
 dags:
-  - dag_id: dbt_finance_daily
-    schedule: "0 3 * * *"
-    select: ["tag:daily"]
-    exclude: ["tag:deprecated"]
-  - dag_id: dbt_finance_monthly
-    schedule: "0 4 1 * *"
-    select: ["+tag:monthly"]
   - dag_id: dbt_finance_billing
-    schedule: "15 3 * * *"
+    schedule: "0 3 * * *"
     select: ["tag:billing"]
   - dag_id: dbt_finance_treasury
+    schedule: "15 3 * * *"
+    select: ["path:models/treasury"]
+  - dag_id: dbt_finance_payments
+    schedule: "30 3 * * *"
+    select: ["+payments_summary"]
+  - dag_id: dbt_finance_ledger
     schedule: "45 3 * * *"
-    select: ["tag:treasury"]
+    select: ["tag:ledger"]
+    exclude: ["tag:deprecated"]

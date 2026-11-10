@@ -1,15 +1,18 @@
+# DAGs for the core project. Each domain is owned by exactly one DAG, so all DAGs
+# can run at the same time without two runs rebuilding the same table.
 defaults:
   tags: [dbt, core]
 dags:
-  - dag_id: dbt_core_daily
-    schedule: "0 2 * * *"
-    select: ["tag:daily"]
-  - dag_id: dbt_core_hourly
-    schedule: "@hourly"
-    select: ["tag:hourly"]
   - dag_id: dbt_core_accounts
-    schedule: "0 6 * * *"
+    schedule: "0 2 * * *"
     select: ["tag:accounts"]
   - dag_id: dbt_core_inventory
-    schedule: "30 6 * * *"
+    schedule: "15 2 * * *"
     select: ["path:models/inventory"]
+  - dag_id: dbt_core_orders
+    schedule: "30 2 * * *"
+    select: ["+orders_summary"]
+  - dag_id: dbt_core_customers
+    schedule: "45 2 * * *"
+    select: ["tag:customers"]
+    exclude: ["tag:deprecated"]

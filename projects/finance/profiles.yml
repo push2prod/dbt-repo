@@ -1,4 +1,4 @@
-# Non-secret fields come from env vars whose CI values (ci/parse.env) match
+# Non-secret fields come from env vars whose CI values (manifest/parse.env) match
 # production, so the shipped partial_parse.msgpack is still valid at runtime.
 # Only the password uses the DBT_ENV_SECRET_ prefix; dbt leaves those out of
 # its parse-state hash.

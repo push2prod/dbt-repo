@@ -1,8 +1,7 @@
 {
-  "built_at_commit": "fb5bf79a351368143576e01e57f33ac4557f67c8",
   "dbt_core": "1.11.17",
+  "input_hash": "03e0174c297faf2b3a76a68d47e5a96ff528f42a7c8abe24940e98f93e2c1b4b",
   "local_packages": [
     "packages/shared_macros"
-  ],
-  "project": "core"
+  ]
 }

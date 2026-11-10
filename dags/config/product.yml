@@ -1,15 +1,18 @@
+# DAGs for the product project. Each domain is owned by exactly one DAG, so all DAGs
+# can run at the same time without two runs rebuilding the same table.
 defaults:
   tags: [dbt, product]
 dags:
   - dag_id: dbt_product_catalog
-    schedule: "0 7 * * *"
+    schedule: "0 5 * * *"
     select: ["tag:catalog"]
   - dag_id: dbt_product_pricing
-    schedule: "10 7 * * *"
-    select: ["tag:pricing"]
+    schedule: "15 5 * * *"
+    select: ["path:models/pricing"]
   - dag_id: dbt_product_reviews
-    schedule: "20 7 * * *"
-    select: ["tag:reviews"]
+    schedule: "30 5 * * *"
+    select: ["+reviews_summary"]
   - dag_id: dbt_product_search
-    schedule: "30 7 * * *"
+    schedule: "45 5 * * *"
     select: ["tag:search"]
+    exclude: ["tag:deprecated"]
