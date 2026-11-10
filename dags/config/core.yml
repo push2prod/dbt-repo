@@ -7,3 +7,9 @@ dags:
   - dag_id: dbt_core_hourly
     schedule: "@hourly"
     select: ["tag:hourly"]
+  - dag_id: dbt_core_accounts
+    schedule: "0 6 * * *"
+    select: ["tag:accounts"]
+  - dag_id: dbt_core_inventory
+    schedule: "30 6 * * *"
+    select: ["path:models/inventory"]

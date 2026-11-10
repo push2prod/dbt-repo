@@ -20,13 +20,13 @@ from conftest import PROJECTS
 
 
 @pytest.mark.parametrize("project", PROJECTS)
-def test_partial_parse_is_reused_after_relocation(deploy_dir, parse_env, tmp_path, project):
+def test_partial_parse_is_reused_after_relocation(deploy_dir, parse_env, dbt_bin, tmp_path, project):
     work = tmp_path / "elsewhere"
     shutil.copytree(deploy_dir, work, symlinks=False)
     project_dir = work / "projects" / project
     env = {**os.environ, **parse_env, "DBT_ENV_SECRET_PG_PASSWORD": "the-real-one-differs"}
     r = subprocess.run(
-        ["dbt", "--log-format", "json", "--log-level", "debug", "ls", "--project-dir", str(project_dir),
+        [dbt_bin, "--log-format", "json", "--log-level", "debug", "ls", "--project-dir", str(project_dir),
          "--profiles-dir", str(project_dir), "--profile", project, "--target", "prod", "--resource-type", "model"],
         env=env, capture_output=True, text=True,
     )

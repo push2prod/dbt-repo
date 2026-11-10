@@ -1,0 +1,4 @@
+packages:
+  - local: ../../packages/shared_macros
+    name: shared_macros
+sha1_hash: 005aea7a3904e733ebd8c4bc6f5994b18870d3d7

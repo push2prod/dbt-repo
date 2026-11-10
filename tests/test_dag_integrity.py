@@ -24,7 +24,7 @@ def dagbag(deploy_dir, monkeypatch_module):
     # probes (e.g. platform.architecture() shelling out to `file`) are not the
     # DAG files' fault. After this, only the DAG files' own work runs.
     import cosmos  # noqa: F401
-    from airflow.dag_processing.dagbag import DagBag
+    from airflow.models.dagbag import DagBag
 
     def forbidden(*args, **kwargs):
         raise AssertionError(f"subprocess started at DAG parse time: {args[:1]}")
@@ -34,7 +34,7 @@ def dagbag(deploy_dir, monkeypatch_module):
 
     sys.path.insert(0, str(deploy_dir / "dags"))
     start = time.monotonic()
-    bag = DagBag(dag_folder=str(deploy_dir / "dags"), safe_mode=True, bundle_path=deploy_dir / "dags")
+    bag = DagBag(dag_folder=str(deploy_dir / "dags"), include_examples=False, safe_mode=True)
     bag.total_seconds = time.monotonic() - start
     return bag
 

@@ -37,6 +37,7 @@ permissions:
 
 env:
   PYTHON_VERSION: "3.12"
+  AIRFLOW_CONSTRAINTS: https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.12.txt
 
 jobs:
   deploy:
@@ -56,8 +57,13 @@ jobs:
           cache: pip
           cache-dependency-path: requirements/*.txt
 
-      - name: Install pinned toolchain
-        run: pip install -r requirements/dbt.txt -r requirements/airflow.txt
+      - name: Install pinned toolchain (two venvs, like the Airflow image)
+        run: |
+          python -m venv "$RUNNER_TEMP/dbt-venv"
+          "$RUNNER_TEMP/dbt-venv/bin/pip" install -q -r requirements/dbt.txt
+          pip install -q -r requirements/airflow.txt -c "$AIRFLOW_CONSTRAINTS"
+          echo "DBT_BIN=$RUNNER_TEMP/dbt-venv/bin/dbt" >> "$GITHUB_ENV"
+          echo "DBT_EXECUTABLE=$RUNNER_TEMP/dbt-venv/bin/dbt" >> "$GITHUB_ENV"
 
       - name: Deployed vs master (before)
         run: bash ci/deploy_status.sh || true

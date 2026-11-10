@@ -7,25 +7,32 @@ No dbt subprocess runs at parse time.
   missing manifest silently falls back to ``DBT_LS``: a `dbt ls` subprocess
   on every parse, which is the problem this repo exists to remove. Explicit
   mode makes a missing manifest show up as a DAG import error.
-* Paths are relative to this file. git-sync exposes the deploy branch
-  through an atomically swapped symlink, so DAG code, project and manifest
-  always come from the same deploy commit.
+* Paths are relative to this file, and ``resolve()`` follows git-sync's
+  symlink to the concrete revision directory. One parse therefore reads DAG
+  code, project and manifest from the same deploy commit, even if git-sync
+  swaps the symlink mid-parse.
+* dbt runs from its own venv (``DBT_EXECUTABLE``, default /opt/dbt-venv/bin/dbt),
+  so it is invoked as a subprocess at *task* time. dbt isn't importable from
+  Airflow's environment.
 """
 
 from __future__ import annotations
 
 import functools
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import yaml
 from cosmos import DbtDag, ExecutionConfig, LoadMode, ProfileConfig, ProjectConfig, RenderConfig
+from cosmos.constants import InvocationMode
 
 DAGS_DIR = Path(__file__).resolve().parent.parent
 DEPLOY_ROOT = DAGS_DIR.parent
 CONFIG_DIR = DAGS_DIR / "config"
 PROJECTS_DIR = DEPLOY_ROOT / "projects"
+DBT_EXECUTABLE = os.environ.get("DBT_EXECUTABLE", "/opt/dbt-venv/bin/dbt")
 
 DEFAULTS: dict[str, Any] = {
     "start_date": "2024-01-01",
@@ -72,7 +79,10 @@ def build_dags(project: str, namespace: dict[str, Any]) -> None:
             tags=[*spec["tags"], f"dbt:{project}"],
             project_config=project_config,
             profile_config=profile_config,
-            execution_config=ExecutionConfig(),
+            execution_config=ExecutionConfig(
+                dbt_executable_path=DBT_EXECUTABLE,
+                invocation_mode=InvocationMode.SUBPROCESS,
+            ),
             render_config=RenderConfig(
                 load_method=LoadMode.DBT_MANIFEST,
                 select=spec.get("select", []),

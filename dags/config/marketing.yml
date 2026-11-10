@@ -8,3 +8,9 @@ dags:
     schedule: "@hourly"
     select: ["path:models/marts/attribution+"]
     exclude: ["last_touch"]
+  - dag_id: dbt_marketing_audiences
+    schedule: "20 5 * * *"
+    select: ["tag:audiences"]
+  - dag_id: dbt_marketing_content
+    schedule: "40 5 * * *"
+    select: ["tag:content"]

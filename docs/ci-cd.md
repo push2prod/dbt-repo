@@ -14,25 +14,26 @@ CI**, ship it with the DAGs, and have Cosmos read it in
 ## Repo layout
 
 ```
-projects/<name>/        one dbt project each (core, finance, marketing)
+projects/<name>/        one dbt project each (core, finance, marketing, product, operations)
   profiles.yml          env-var based, the same file for CI and prod
   package-lock.yml      committed, so `dbt deps` is reproducible
 packages/shared_macros  a local dbt package used by every project
 dags/
-  dbt_<project>.py      2-line DAG files
+  dbt_<project>.py      2-line DAG files (5 files -> 20 DAGs, 5-10 models each)
   config/<project>.yml  which DAGs exist: schedule + select/exclude
   dbt_factory/          builds Cosmos DbtDags (explicit DBT_MANIFEST)
 ci/
   build.py              assembles the deploy tree; re-parses only changed projects
-  slim_manifest.py      optional manifest shrinking (SLIM_MANIFEST=1)
   publish.sh            freshness check + compare-and-swap commit onto `deploy`
   deploy.sh             build → test → publish, retried when publish loses a race
   deploy_status.sh      is deploy an up-to-date build of master's tip?
   parse.env             env for `dbt parse` (non-secret values = prod)
   e2e_merge_strategies.sh  local end-to-end check of all merge strategies
 tests/                  run against the built tree
-requirements/dbt.txt    the single dbt pin, shared by CI and runtime
-deploy/airflow/values.yaml  git-sync + DAG processor settings
+strain/                 real Airflow 2.10 strain test (see below)
+requirements/dbt.txt    the single dbt pin; its own venv in CI and on the image
+requirements/airflow.txt  Airflow 2.10.5 + Cosmos 1.15.1
+deploy/airflow/values.yaml  git-sync + [scheduler] parsing settings for 2.10
 ```
 
 ## Pipeline
@@ -46,6 +47,7 @@ PR / merge queue  (.github/workflows/ci.yml)
                            DBT_LS fallback)
     test_selector_parity   for every DAG: Cosmos' manifest selection == `dbt ls`
     test_partial_parse     msgpack still valid after moving the tree + a different secret
+    test_compile           every model's SQL renders (dbt compile, no warehouse)
   commit-hygiene           no [skip ci] markers in PR title/commits
   diff summary vs current deploy, artifact upload
 
@@ -82,8 +84,8 @@ git diff --name-only <Source-Commit of origin/deploy> <master tip>
 
 * changed path under `projects/<name>/` → re-run `dbt deps` + `dbt parse` for that project
 * changed local package it uses (`packages.yml` → `local:`) → re-parse that project
-* changed `requirements/dbt.txt`, `ci/parse.env`, `ci/build.py`, `ci/slim_manifest.py`,
-  or a different dbt version/slim setting recorded in `build-info.json` → re-parse all
+* changed `requirements/dbt.txt`, `ci/parse.env`, `ci/build.py`,
+  or a different dbt version recorded in `build-info.json` → re-parse all
 * new project → build it, deleted project → it is simply absent from the new tree
 * anything else → copy the project's files from the current deploy commit,
   **byte for byte** (`git archive`)
@@ -188,7 +190,7 @@ In manifest mode Cosmos implements dbt's selector syntax itself, in Python,
 and only part of it. `test_selector_parity` runs every DAG's select/exclude
 through both `dbt ls` and Cosmos and requires the same models, seeds and snapshots.
 
-With Cosmos 1.16 these match dbt: `tag:`, `path:`, bare paths, `+`/`n+`
+With Cosmos 1.15/1.16 these match dbt: `tag:`, `path:`, bare paths, `+`/`n+`
 graph operators, `@`, intersections (`a,b`), `config.materialized:`,
 `resource_type:`, `package:`, and exclude with graph operators.
 **`fqn:` with wildcards (`fqn:finance.marts.*`) does not.** dbt selects 3
@@ -238,18 +240,82 @@ commit, a one-commit revert, and a 1:1 audit trail.
 | 7 | add a project / delete a project | built / removed |
 | 8 | master force-pushed | new tip deployed |
 
+## Strain test: real Airflow 2.10 (`strain/run.py`)
+
+The tests above load the DAG files in-process. `strain/run.py` checks the
+whole path on a real Airflow instead:
+
+* **Setup:** Postgres (metadata + "warehouse"), Airflow 2.10.5 + Cosmos 1.15.1,
+  LocalExecutor, standalone DAG processor, the `[scheduler]` settings from
+  `deploy/airflow/values.yaml`, and dbt in its own venv.
+* **Deploy path:** `deploy` is published by `ci/deploy.sh` to a local
+  origin, and `strain/gitsync.sh` follows it with the same atomic
+  symlink-swap layout as git-sync.
+* **Load:** 10 of the 20 DAGs are kept running back to back. Every model is
+  a real `dbt run` subprocess, up to 16 at once.
+* **The change:** while loaded, 5 DAGs change on master, five different ways:
+  a model added, a model deleted, an exclude added in DAG config, a schedule
+  changed, and a model added with a new dependency. Then it deploys.
+
+Result on a 4-core machine (run it yourself: ~5 minutes):
+
+| check | result |
+|---|---|
+| peak strain | 16 dbt tasks running, load average 18 on 4 cores |
+| 20 DAGs serialized, 0 import errors | every sample (~57 over the run) |
+| scheduler / DAG processor heartbeat age | max 6.0s / 4.9s (threshold 30s) |
+| parse time per DAG file under load (probe) | worst 2.3s; whole folder 2.8s |
+| 5 changes visible in the serialized DagBag | **10s after publish** (~40s after merge, incl. build) |
+| other 15 DAGs | structure unchanged |
+| all 20 DAGs re-parsed after deploy | yes, despite `min_file_process_interval=600` |
+| task failures, incl. tasks in flight during the swap | 0 (234 succeeded) |
+
+### What it found (and what's fixed)
+1. **Deploys don't wait for `min_file_process_interval`.** With
+   `file_parsing_sort_mode=modified_time` (the default), Airflow 2.10
+   re-parses any file whose mtime is newer than its last parse. git-sync
+   writes every revision fresh, so a deploy is live within seconds even with
+   a 600s interval. A long interval is therefore safe; it only stops pointless
+   re-parsing between deploys.
+2. **git-sync must keep the old checkout for a while.** A task binds to the
+   revision it parsed, and Cosmos runs dbt from a temp dir of *symlinks*
+   into that revision. With git-sync's default `--stale-worktree-timeout=0`,
+   tasks in flight during a deploy fail with `FileNotFoundError`
+   (`strain/run.py --stale-worktree-timeout 0` reproduces it: 10 tasks failed
+   and 26 were skipped downstream in one deploy, versus 0 with a 600s timeout).
+   `values.yaml` sets `GITSYNC_STALE_WORKTREE_TIMEOUT=2h`; use more than your
+   longest task.
+3. **`dbt parse` doesn't validate SQL.** A package macro called without its
+   prefix (`cents_to_dollars()` instead of `shared_macros.cents_to_dollars()`)
+   parses fine, gives a valid manifest and valid DAGs, and fails every task.
+   Hence `tests/test_compile.py`: `dbt compile --no-introspect
+   --no-populate-cache` renders every model without a warehouse.
+4. **Cosmos 1.16 requires Airflow ≥ 2.11.** On 2.10 use Cosmos 1.15.x.
+   Selector parity is re-checked by CI on whatever version is pinned.
+5. **Cosmos's partial-parse cache** (`[cosmos] cache_dir`, per DAG on local
+   disk) is chosen over the shipped msgpack by mtime. Fresh git-sync
+   checkouts make the shipped one win after each deploy. Don't turn the cache
+   off with `enable_cache`: in Cosmos 1.15, tasks then get *no* msgpack and
+   fully re-parse each time.
+
 ## Operational settings (Airflow)
-See `deploy/airflow/values.yaml`: `min_file_process_interval: 600`,
-`parsing_processes` ≤ cores − 1, a CPU request and no CPU limit for the DAG
-processor, git-sync on `deploy` with `subPath: dags`.
+See `deploy/airflow/values.yaml` (Airflow 2.10 keys): `min_file_process_interval: 600`
+with `file_parsing_sort_mode: modified_time`, `parsing_processes` ≤ cores − 1,
+standalone DAG processor with a CPU request and no CPU limit, git-sync on
+`deploy` with `subPath: dags` and `GITSYNC_STALE_WORKTREE_TIMEOUT`,
+`DBT_EXECUTABLE=/opt/dbt-venv/bin/dbt`.
 
 ## Running locally
 
 ```bash
-pip install -r requirements/dbt.txt -r requirements/airflow.txt
-python ci/build.py --out build/deploy --previous origin/deploy   # --slim, --no-reuse
+python -m venv /opt/dbt-venv && /opt/dbt-venv/bin/pip install -r requirements/dbt.txt
+pip install -r requirements/airflow.txt \
+  -c https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.12.txt
+export DBT_BIN=/opt/dbt-venv/bin/dbt DBT_EXECUTABLE=/opt/dbt-venv/bin/dbt
+python ci/build.py --out build/deploy --previous origin/deploy   # --no-reuse to rebuild all
 DEPLOY_DIR=build/deploy pytest
 bash ci/e2e_merge_strategies.sh                  # ~70s, no network needed
+DBT_VENV=/opt/dbt-venv python strain/run.py      # ~5 min, needs Postgres binaries
 ```
 
 ## Branch protection
@@ -265,5 +331,3 @@ bash ci/e2e_merge_strategies.sh                  # ~70s, no network needed
   match. The Airflow image no longer needs dbt.
 * **No per-model tasks needed?** Use one pod per selector (`dbt build
   --select tag:x`). Parse cost is close to zero and there is no manifest coupling.
-* **Large projects**: `SLIM_MANIFEST=1` (keep-list matched to Cosmos 1.16,
-  verified by the parity test), and `orjson` in the Airflow image.

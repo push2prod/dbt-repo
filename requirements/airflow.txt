@@ -1,6 +1,9 @@
-# Airflow-side packages used by DAG validation in CI. Pin them to the same
-# versions as the Airflow image.
-apache-airflow==3.4.0
-astronomer-cosmos==1.16.0
+# Airflow side, used by DAG validation in CI. Pin to the Airflow image.
+# Install with Airflow's constraints file:
+#   pip install -r requirements/airflow.txt \
+#     -c https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.12.txt
+# astronomer-cosmos 1.16+ requires Airflow >= 2.11, so 1.15.x is the newest for 2.10.
+apache-airflow[postgres]==2.10.5
+astronomer-cosmos==1.15.1
 pyyaml>=6
 pytest>=8

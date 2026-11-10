@@ -32,8 +32,8 @@ def _specs():
             yield pytest.param(project, spec, id=spec["dag_id"])
 
 
-def dbt_ls(project_dir, project, select, exclude, env) -> set[str]:
-    cmd = ["dbt", "ls", "--project-dir", str(project_dir), "--profiles-dir", str(project_dir),
+def dbt_ls(dbt_bin, project_dir, project, select, exclude, env) -> set[str]:
+    cmd = [dbt_bin, "ls", "--project-dir", str(project_dir), "--profiles-dir", str(project_dir),
            "--profile", project, "--target", "prod", "--output", "json", "--output-keys", "unique_id", "resource_type",
            "--quiet", "--no-use-colors"]
     if select:
@@ -61,7 +61,7 @@ def cosmos_select(project_dir, select, exclude) -> set[str]:
 
 
 @pytest.mark.parametrize("project,spec", list(_specs()))
-def test_manifest_selection_matches_dbt_ls(deploy_dir, parse_env, tmp_path, project, spec):
+def test_manifest_selection_matches_dbt_ls(deploy_dir, parse_env, dbt_bin, tmp_path, project, spec):
     # Run dbt ls on a copy so it cannot rewrite the shipped target/ files.
     import shutil
 
@@ -70,7 +70,7 @@ def test_manifest_selection_matches_dbt_ls(deploy_dir, parse_env, tmp_path, proj
     project_dir = work / "projects" / project
     select, exclude = spec.get("select", []), spec.get("exclude", [])
 
-    expected = dbt_ls(project_dir, project, select, exclude, parse_env)
+    expected = dbt_ls(dbt_bin, project_dir, project, select, exclude, parse_env)
     actual = cosmos_select(deploy_dir / "projects" / project, select, exclude)
 
     assert expected, f"{spec['dag_id']}: selector matches nothing in dbt"

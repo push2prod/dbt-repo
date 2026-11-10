@@ -29,7 +29,16 @@ def parse_env() -> dict[str, str]:
     sys.path.insert(0, str(REPO / "ci"))
     from build import load_env_file
 
-    return load_env_file(REPO / "ci" / "parse.env")
+    return load_env_file(Path(os.environ.get("PARSE_ENV", REPO / "ci" / "parse.env")))
+
+
+@pytest.fixture(scope="session")
+def dbt_bin() -> str:
+    """dbt from its own venv (DBT_BIN), as on the Airflow image."""
+    sys.path.insert(0, str(REPO / "ci"))
+    from build import DBT_BIN
+
+    return DBT_BIN
 
 
 def projects(deploy: Path) -> list[str]:

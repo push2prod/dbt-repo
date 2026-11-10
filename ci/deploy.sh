@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # build -> test -> publish, retried when publish loses a race (exit 75).
 #
-#   ci/deploy.sh [--no-reuse] [--slim]        (extra args go to build.py)
+#   ci/deploy.sh [--no-reuse]                (extra args go to build.py)
 #
 # A retry starts from the *new* deploy tip, so manifests carried over for
 # unchanged projects are always the ones currently deployed, and the diff

@@ -1,6 +1,17 @@
-# Apache Airflow Helm chart values: the parts that matter for this repo.
-# Airflow 3.x keys. On 2.x the [dag_processor] options live under [scheduler]
-# (and refresh_interval is called dag_dir_list_interval).
+# Apache Airflow Helm chart values for Airflow 2.10: the parts that matter
+# for this repo. Every [scheduler] value below is also what
+# strain/run_strain_test.sh runs with.
+
+images:
+  airflow:
+    # Image = Airflow 2.10.5 + astronomer-cosmos 1.15.1 (requirements/airflow.txt)
+    # plus a separate venv with requirements/dbt.txt at /opt/dbt-venv.
+    repository: your-registry/airflow-dbt
+    tag: "2.10.5-cosmos1.15.1-dbt1.11.17"
+
+env:
+  - name: DBT_EXECUTABLE          # read by dags/dbt_factory
+    value: /opt/dbt-venv/bin/dbt
 
 dags:
   gitSync:
@@ -12,42 +23,55 @@ dags:
     subPath: dags           # dags_folder = <repo>/dags; projects/ sits next to it
     period: 60s
     # git-sync checks out each revision into its own directory and swaps a
-    # symlink atomically. DAG code, projects/ and manifests therefore always
-    # come from the same deploy commit, never a half-updated mix.
+    # symlink atomically, so DAG code, projects/ and manifests always come
+    # from one deploy commit. Fresh checkout = fresh mtimes, which is what
+    # gets changed files re-parsed right away (see below).
+    env:
+      # Keep the previous checkout around for longer than your longest dbt
+      # task. A task binds to the revision it parsed, and Cosmos runs dbt from
+      # a temp dir of symlinks into that revision. With git-sync's default (0),
+      # the old checkout is deleted right after the swap and tasks in flight
+      # fail with FileNotFoundError. strain/run.py --stale-worktree-timeout 0
+      # reproduces it. Check the flag against your git-sync v4 version
+      # (--stale-worktree-timeout).
+      - name: GITSYNC_STALE_WORKTREE_TIMEOUT
+        value: "2h"
   persistence:
     enabled: false
 
-# Alternative on Airflow 3: a versioned GitDagBundle instead of the sidecar.
-# Tasks then run against the exact bundle version their DAG run was parsed
-# from. dags/dbt_factory resolves every path relative to __file__, so both
-# setups work unchanged.
-#   config:
-#     dag_processor:
-#       dag_bundle_config_list: '[{"name":"dbt","classpath":"airflow.providers.git.bundles.git.GitDagBundle","kwargs":{"git_conn_id":"github_dbt_repo","tracking_ref":"deploy","subdir":"dags"}}]'
-
 config:
-  dag_processor:
-    # DAG structure only changes on deploy. Re-parsing every 30s is wasted
-    # CPU even when parsing is cheap.
+  scheduler:
+    # DAG structure only changes on deploy. Files git-sync rewrites are still
+    # picked up within seconds, because with file_parsing_sort_mode =
+    # modified_time (the default) Airflow 2.10 skips this interval for any
+    # file whose mtime is newer than its last parse
+    # (airflow/dag_processing/manager.py, prepare_file_path_queue).
     min_file_process_interval: 600
-    refresh_interval: 120
-    # Keep at most cores - 1 so the processor's own heartbeat loop always has a core.
+    file_parsing_sort_mode: modified_time
+    dag_dir_list_interval: 120
+    # Keep at most cores - 1, so the processor loop and scheduler keep a core.
     parsing_processes: 3
     dag_file_processor_timeout: 120
+    standalone_dag_processor: "True"   # parsing load can't starve the scheduler loop
   core:
     dagbag_import_timeout: 60
-  # Cosmos only reads manifest.json at parse time. orjson makes that faster
-  # for big manifests (needs `orjson` in the image).
-  cosmos:
-    enable_orjson_parser: "True"
+    # Ceiling for concurrently running dbt tasks. Each one is a dbt subprocess.
+    parallelism: 32
 
 dagProcessor:
   enabled: true
   resources:
     # Request real CPU and set no CPU limit: CFS throttling under a tight limit
-    # is what made the processor miss heartbeats. Memory limit is fine.
+    # is what made the processor miss heartbeats. A memory limit is fine.
     requests:
-      cpu: "4"
+      cpu: "2"
       memory: 2Gi
     limits:
+      memory: 4Gi
+
+workers:
+  resources:
+    # dbt tasks are the CPU-heavy part. Size here, not on the processor.
+    requests:
+      cpu: "2"
       memory: 4Gi

@@ -12,7 +12,7 @@ TIP=$(git rev-parse origin/master)
 SRC=$(git log -1 --format='%(trailers:key=Source-Commit,valueonly)' origin/deploy | head -1 | tr -d '[:space:]')
 [[ -n "$SRC" ]] || { echo "drift: deploy has no Source-Commit"; exit 1; }
 # Inputs that end up in the deploy tree or change how it is built.
-DEPLOYABLE=(dags packages projects requirements/dbt.txt ci/parse.env ci/build.py ci/slim_manifest.py)
+DEPLOYABLE=(dags packages projects requirements/dbt.txt ci/parse.env ci/build.py)
 CHANGED=$(git diff --name-only "$SRC" "$TIP" -- "${DEPLOYABLE[@]}")
 if [[ -z "$CHANGED" ]]; then
   echo "in sync: deploy built from ${SRC:0:12}, master at ${TIP:0:12}, no deployable change in between"

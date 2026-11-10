@@ -31,8 +31,8 @@ against the previous commit:
 * A project is changed if a file under ``projects/<name>/`` changed, or one
   of the local packages it uses (``packages.yml`` ``local:``).
 * Everything is rebuilt when there is no previous deploy, its source commit
-  is unknown, or a global input changed (dbt pins, parse env, build scripts),
-  or when the toolchain recorded in build-info.json differs.
+  is unknown, or a global input changed (dbt pins, parse env, build script),
+  or when the dbt version recorded in build-info.json differs.
 * Deleted projects disappear from the deploy tree; new ones are built.
 
 Unchanged projects are never re-parsed. A rebuilt manifest is never
@@ -58,8 +58,11 @@ REPO = Path(__file__).resolve().parent.parent
 PROJECTS_DIR = "projects"
 TARGET = "prod"  # must equal ProfileConfig.target_name in dags/dbt_factory
 # Changes here invalidate every project's build output.
-GLOBAL_INPUTS = ["requirements/dbt.txt", "ci/parse.env", "ci/build.py", "ci/slim_manifest.py"]
+GLOBAL_INPUTS = ["requirements/dbt.txt", "ci/parse.env", "ci/build.py"]
 KEEP_TARGET_FILES = {"manifest.json", "partial_parse.msgpack"}
+# dbt lives in its own venv, as on the Airflow image (/opt/dbt-venv). Point
+# DBT_BIN at that venv's dbt; its python is used to check the pins.
+DBT_BIN = os.environ.get("DBT_BIN") or shutil.which("dbt") or "dbt"
 
 
 def log(msg: str) -> None:
@@ -130,25 +133,28 @@ def load_env_file(path: Path) -> dict[str, str]:
     return env
 
 
-def dbt_version() -> str:
-    from importlib.metadata import version
+def dbt_python() -> str:
+    return str(Path(DBT_BIN).resolve().parent / "python")
 
-    return version("dbt-core")
+
+def installed_versions() -> dict[str, str]:
+    code = "import json, importlib.metadata as m; print(json.dumps({d.metadata['Name'].lower(): d.version for d in m.distributions()}))"
+    return json.loads(subprocess.run([dbt_python(), "-c", code], check=True, capture_output=True, text=True).stdout)
+
+
+def dbt_version() -> str:
+    return installed_versions()["dbt-core"]
 
 
 def check_pins() -> None:
-    """Refuse to build with a dbt that differs from requirements/dbt.txt."""
-    from importlib.metadata import PackageNotFoundError, version
-
+    """Refuse to build with a dbt (venv) that differs from requirements/dbt.txt."""
+    have_all = installed_versions()
     bad = []
     for line in (REPO / "requirements/dbt.txt").read_text().splitlines():
         line = line.split("#")[0].strip()
         if "==" in line:
             name, want = (s.strip() for s in line.split("=="))
-            try:
-                have = version(name)
-            except PackageNotFoundError:
-                have = "<missing>"
+            have = have_all.get(name.lower(), "<missing>")
             if have != want:
                 bad.append(f"{name}: installed {have}, pinned {want}")
     if bad:
@@ -177,7 +183,7 @@ def dereference_symlinks(root: Path) -> None:
         shutil.rmtree(git_dir) if git_dir.is_dir() else git_dir.unlink()
 
 
-def build_project(name: str, out: Path, env: dict[str, str], slim: bool) -> None:
+def build_project(name: str, out: Path, env: dict[str, str]) -> None:
     proj = out / PROJECTS_DIR / name
     common = ["--project-dir", str(proj), "--profiles-dir", str(proj), "--no-use-colors"]
     run_env = {**os.environ, **env, "DBT_SEND_ANONYMOUS_USAGE_STATS": "false"}
@@ -186,7 +192,7 @@ def build_project(name: str, out: Path, env: dict[str, str], slim: bool) -> None
     # state, so any difference makes the shipped msgpack useless.
     for cmd in (["deps"], ["parse", "--profile", name, "--target", TARGET]):
         log(f"{name}: dbt {' '.join(cmd)}")
-        r = subprocess.run(["dbt", *cmd, *common], env=run_env, capture_output=True, text=True)
+        r = subprocess.run([DBT_BIN, *cmd, *common], env=run_env, capture_output=True, text=True)
         if r.returncode != 0:
             sys.exit(f"[build] {name}: dbt {cmd[0]} failed\n{r.stdout}\n{r.stderr}")
     dereference_symlinks(proj / "dbt_packages")
@@ -198,11 +204,6 @@ def build_project(name: str, out: Path, env: dict[str, str], slim: bool) -> None
     missing = KEEP_TARGET_FILES - {p.name for p in target.iterdir()}
     if missing:
         sys.exit(f"[build] {name}: dbt parse did not produce {sorted(missing)}")
-    if slim:
-        from slim_manifest import slim_file
-
-        before, after = slim_file(target / "manifest.json")
-        log(f"{name}: slimmed manifest {before // 1024} KiB -> {after // 1024} KiB")
 
 
 def plan(base: str | None, no_reuse: bool) -> tuple[str | None, list[str] | None]:
@@ -229,12 +230,6 @@ def main() -> None:
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--previous", help="git ref of the current deploy (e.g. origin/deploy)")
     ap.add_argument("--no-reuse", action="store_true", help="rebuild every project")
-    ap.add_argument(
-        "--slim",
-        action=argparse.BooleanOptionalAction,
-        default=os.environ.get("SLIM_MANIFEST", "0") == "1",
-        help="strip fields Cosmos does not read from manifest.json (env SLIM_MANIFEST=1)",
-    )
     args = ap.parse_args()
     sys.path.insert(0, str(Path(__file__).parent))
 
@@ -243,7 +238,9 @@ def main() -> None:
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True)
-    env = load_env_file(REPO / "ci/parse.env")
+    # PARSE_ENV lets a test environment (strain/) bake its own warehouse
+    # address into the parse state. Production always uses ci/parse.env.
+    env = load_env_file(Path(os.environ.get("PARSE_ENV", REPO / "ci/parse.env")))
     source = git_out("rev-parse", "HEAD")
 
     base = None
@@ -258,7 +255,7 @@ def main() -> None:
     copy_tracked(REPO / "packages", out / "packages")
     (out / ".airflowignore").write_text("# only dags/ holds DAG files\nprojects/\npackages/\n")
 
-    toolchain = {"dbt_core": dbt_version(), "slim_manifest": args.slim}
+    toolchain = {"dbt_core": dbt_version()}
     summary: dict[str, str] = {}
     for project_yml in sorted((REPO / PROJECTS_DIR).glob("*/dbt_project.yml")):
         src = project_yml.parent
@@ -282,7 +279,7 @@ def main() -> None:
             summary[name] = f"reused (built at {prev_info.get('built_at_commit', '?')[:12]})"
         else:
             copy_tracked(src, out / rel)
-            build_project(name, out, env, args.slim)
+            build_project(name, out, env)
             info = {"project": name, **toolchain, "built_at_commit": source, "local_packages": deps}
             (out / rel / "target/build-info.json").write_text(json.dumps(info, indent=2, sort_keys=True) + "\n")
             summary[name] = f"built ({reason})"
