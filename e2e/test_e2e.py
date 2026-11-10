@@ -28,7 +28,7 @@ from typing import Any
 import pytest
 
 from e2e.harness import settings as s
-from e2e.harness.airflow import AirflowAPI, create_namespace, install_chart
+from e2e.harness.airflow import AirflowAPI, create_namespace, install_chart, iso_ts
 from e2e.harness.cluster import Cluster
 from e2e.harness.diag import dump
 from e2e.harness.gitserver import Syncer, deploy_git_server
@@ -92,7 +92,8 @@ def stack(tmp_path_factory: pytest.TempPathFactory, request: pytest.FixtureReque
             st.report["samples"] = [asdict(x) for x in st.load.samples]
             s.REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
             s.REPORT_PATH.write_text(json.dumps(st.report, indent=2, default=str))
-            print(f"[e2e] report: {s.REPORT_PATH}")
+            brief = {k: v for k, v in st.report.items() if k != "samples"}
+            print(f"[e2e] report ({s.REPORT_PATH}):\n{json.dumps(brief, indent=2, default=str)}", flush=True)
 
 
 def _wait(predicate: Callable[[], bool], timeout: float, what: str, tick: Callable[[], object] | None = None) -> float:
@@ -135,10 +136,25 @@ def test_patches_under_load(stack: Stack) -> None:
 
     t_sync = time.time()
     stack.syncer.sync(stack.workdir / "bundle-v2")
-    visible = _wait(lambda: not unmet(exp, stack.airflow.shapes()), 300, "patch expectations", stack.load.tick)
+    polled = _wait(lambda: not unmet(exp, stack.airflow.shapes()), 300, "patch expectations", stack.load.tick)
+    visible = parse_latency(stack.airflow, set(exp.dags), t_sync)
     stack.report["patches_visible_seconds"] = round(visible, 1)
+    stack.report["patches_seen_by_poll_seconds"] = round(polled, 1)  # upper bound: poll loop granularity
     stack.load.run_for(s.HOLD_SECONDS)
     _assert_healthy(stack, t_sync, visible)
+
+
+def parse_latency(airflow: AirflowAPI, dag_ids: set[str], t_sync: float) -> float:
+    """Sync -> Airflow serialized the changed DAGs, from Airflow's own last_parsed_time.
+
+    Independent of how often the test polls: the DAG processor stamps each DAG when
+    it parses it, and with min_file_process_interval=600 nothing re-parses them
+    again within the test, so the stamp marks the parse that picked up the change.
+    """
+    parsed = {d["dag_id"]: iso_ts(d.get("last_parsed_time")) for d in airflow.dags() if d["dag_id"] in dag_ids}
+    stamps = [ts for ts in parsed.values() if ts is not None]
+    assert len(stamps) == len(dag_ids), f"no parse time for {dag_ids - set(parsed)}"
+    return max(stamps) - t_sync
 
 
 def _assert_healthy(stack: Stack, t_sync: float, visible: float) -> None:
