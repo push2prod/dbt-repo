@@ -25,7 +25,7 @@ from dataclasses import asdict
 import pytest
 
 from e2e.harness import settings as s
-from e2e.harness.airflow import install_chart, iso_ts
+from e2e.harness.airflow import install_chart, iso_ts, pod_summary
 from e2e.harness.cluster import Cluster
 from e2e.harness.diag import dump
 from e2e.harness.log import log
@@ -75,7 +75,8 @@ def test_baseline_dags_parse(stack: Stack) -> None:
 
     def progress() -> str:
         errors = stack.airflow.import_errors()
-        return f"{len(stack.airflow.dags())}/{s.EXPECTED_DAGS} DAGs, {len(errors)} import errors"
+        pods = pod_summary(stack.cluster.api) if stack.cluster.api else "?"
+        return f"{len(stack.airflow.dags())}/{s.EXPECTED_DAGS} DAGs, {len(errors)} import errors; pods: {pods}"
 
     waited = wait_for(
         f"all {s.EXPECTED_DAGS} DAGs parsed",

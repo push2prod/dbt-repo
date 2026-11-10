@@ -39,7 +39,10 @@ PG_PASSWORD = "e2e-secret"  # runtime secret; the parse env uses a dummy on purp
 PG_ALIAS = "warehouse"
 
 # Stress-test shape and pass criteria.
-PARALLELISM = int(os.environ.get("E2E_PARALLELISM", "12"))  # concurrent task pods
+# Concurrent task pods. Default: 3 per node CPU (6 on GitHub's 2-vCPU private-repo
+# runners, 12 on 4-vCPU ones), so memory fits too; E2E_PARALLELISM overrides.
+PARALLELISM_OVERRIDE = int(os.environ["E2E_PARALLELISM"]) if os.environ.get("E2E_PARALLELISM") else None
+TASK_PODS_PER_CPU = 3
 WARMUP_SECONDS = int(os.environ.get("E2E_WARMUP_SECONDS", "120"))
 HOLD_SECONDS = int(os.environ.get("E2E_HOLD_SECONDS", "120"))
 VISIBLE_WITHIN_SECONDS = 60  # every patch visible in Airflow after the sync

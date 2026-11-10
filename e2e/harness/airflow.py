@@ -32,7 +32,34 @@ def deep_merge(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def chart_values(pg_ip: str) -> dict[str, Any]:
+def node_cpus(api: client.ApiClient) -> float:
+    """Allocatable CPUs of the (single) k3s node."""
+    status = client.CoreV1Api(api).list_node().items[0].status
+    raw = str((status.allocatable if status and status.allocatable else {}).get("cpu", "2"))
+    return float(raw[:-1]) / 1000 if raw.endswith("m") else float(raw)
+
+
+def control_plane_resources(cpus: float) -> dict[str, Any]:
+    """Size the DAG processor and webserver from the runner, keeping production's intent.
+
+    Production requests 2 CPUs for the DAG processor (deploy/airflow/values.yaml),
+    but CI runners differ (GitHub gives private repos 2 vCPUs, public ones 4). What
+    protects parsing under load is the request *ratio* against the 50m task pods
+    (CPU shares follow requests), so the processor gets 40% of the node and the
+    webserver 20%: 20x and 10x the weight of each task pod even on a 2-CPU runner.
+    """
+    proc, web = round(cpus * 0.4, 2), round(cpus * 0.2, 2)
+    return {
+        "dagProcessor": {"resources": {"requests": {"cpu": str(proc), "memory": "1Gi"}, "limits": {"memory": "3Gi"}}},
+        "webserver": {"resources": {"requests": {"cpu": str(web), "memory": "1Gi"}}},
+    }
+
+
+def parallelism(cpus: float) -> int:
+    return s.PARALLELISM_OVERRIDE or max(4, int(cpus * s.TASK_PODS_PER_CPU))
+
+
+def chart_values(pg_ip: str, cpus: float = 4.0) -> dict[str, Any]:
     prod = yaml.safe_load((s.REPO / "deploy/airflow/values.yaml").read_text())
     e2e = yaml.safe_load((s.REPO / "e2e/values-e2e.yaml").read_text())
     repo, tag = s.AIRFLOW_IMAGE.split(":")
@@ -58,12 +85,19 @@ def chart_values(pg_ip: str) -> dict[str, Any]:
             {"name": "DBT_PG_DBNAME", "value": "analytics"},
             {"name": "DBT_ENV_SECRET_PG_PASSWORD", "value": s.PG_PASSWORD},
         ],
-        "config": {"core": {"parallelism": str(s.PARALLELISM)}},
+        "config": {"core": {"parallelism": str(parallelism(cpus))}},
     }
-    return deep_merge(deep_merge(prod, e2e), runtime)
+    return deep_merge(deep_merge(deep_merge(prod, e2e), control_plane_resources(cpus)), runtime)
 
 
 def install_chart(api: client.ApiClient, pg_ip: str) -> None:
+    cpus = node_cpus(api)
+    sizes = control_plane_resources(cpus)
+    log(
+        f"node has {cpus:g} allocatable CPUs: DAG processor requests "
+        f"{sizes['dagProcessor']['resources']['requests']['cpu']}, webserver "
+        f"{sizes['webserver']['resources']['requests']['cpu']}, up to {parallelism(cpus)} task pods at 50m each"
+    )
     log(f"installing the Airflow Helm chart via the K3s Helm controller ({s.CHART_URL.rsplit('/', 1)[-1]})")
     chart = requests.get(s.CHART_URL, timeout=120)
     chart.raise_for_status()
@@ -74,7 +108,7 @@ def install_chart(api: client.ApiClient, pg_ip: str) -> None:
         "spec": {
             "chartContent": base64.b64encode(chart.content).decode(),
             "targetNamespace": s.NAMESPACE,
-            "valuesContent": yaml.safe_dump(chart_values(pg_ip)),
+            "valuesContent": yaml.safe_dump(chart_values(pg_ip, cpus)),
             "timeout": "20m",
         },
     }
@@ -98,8 +132,16 @@ def pod_summary(api: client.ApiClient) -> str:
         statuses = (pod.status.container_statuses if pod.status else None) or []
         ready = sum(bool(c.ready) for c in statuses)
         phase = pod.status.phase if pod.status else "?"
-        parts.append(f"{comp} {phase} {ready}/{len(statuses)}")
+        parts.append(f"{comp} {phase} {ready}/{len(statuses)}{_unscheduled_reason(pod)}")
     return ", ".join(sorted(parts)) or "no Airflow pods yet"
+
+
+def _unscheduled_reason(pod: client.V1Pod) -> str:
+    """' [unschedulable: 0/1 nodes are available: 1 Insufficient cpu]' for a pod that can't be placed."""
+    for cond in (pod.status.conditions if pod.status else None) or []:
+        if cond.type == "PodScheduled" and cond.status == "False":
+            return f" [unschedulable: {cond.message or cond.reason}]"
+    return ""
 
 
 def iso_ts(value: str | None) -> float | None:

@@ -43,15 +43,11 @@ webserver:
         port: 8080
         targetPort: 8080
         nodePort: 30080
-  # Same CPU request as production: below that, the liveness probe times out on a
-  # saturated node and Kubernetes restarts the webserver (seen in an e2e run at 200m).
-  resources:
-    requests: {cpu: 500m, memory: 1Gi}
 
-# Small requests so a 4-CPU / 16 GB runner fits the control plane plus
-# E2E_PARALLELISM task pods. The DAG processor keeps its production sizing
-# (deploy/airflow/values.yaml: 2 CPU requested, no CPU limit): that request is
-# what protects parsing from the dbt task pods, so the test must not weaken it.
+# Small requests so the runner fits the control plane plus the task pods. The
+# DAG processor and webserver are sized from the node at install time
+# (e2e/harness/airflow.py: 40% / 20% of its CPUs), keeping production's intent of
+# a large request ratio over the 50m task pods.
 scheduler:
   resources:
     requests: {cpu: 200m, memory: 512Mi}

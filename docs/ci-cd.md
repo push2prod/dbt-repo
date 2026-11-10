@@ -180,7 +180,9 @@ processor kept the scheduler's heartbeat healthy in every mode.
 ## Runner requirements and knobs
 
 * Docker that allows privileged containers: GitHub's `ubuntu-latest`, or GitLab
-  `docker:dind` on a privileged runner. Size: 4 vCPU / 16 GB at `E2E_PARALLELISM=12`.
+  `docker:dind` on a privileged runner. The test sizes itself from the node:
+  DAG processor 40% and webserver 20% of the CPUs, 3 task pods per CPU (so 6 on
+  GitHub's 2-vCPU private-repo runners, 12 on 4-vCPU ones; `E2E_PARALLELISM` overrides).
 * Optional env: `E2E_EXTRA_CA_FILE` (TLS-inspecting proxy), `E2E_REGISTRY_MIRROR`
   (Docker Hub rate limits, e.g. `https://mirror.gcr.io`), `E2E_*_IMAGE`,
   `E2E_WARMUP_SECONDS`, `E2E_HOLD_SECONDS`, `E2E_PARALLELISM`.
