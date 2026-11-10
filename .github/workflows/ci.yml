@@ -61,7 +61,7 @@ jobs:
       - name: Install pinned toolchain
         run: pip install -r requirements/dbt.txt -r requirements/airflow.txt
 
-      - name: Build deploy tree
+      - name: Build deploy tree (re-parses only projects changed vs what's deployed)
         run: python ci/build.py --out build/deploy --previous origin/deploy
 
       - name: Test deploy tree (DAG import, selector parity, partial parse)

@@ -23,9 +23,11 @@ dags/
   config/<project>.yml  which DAGs exist: schedule + select/exclude
   dbt_factory/          builds Cosmos DbtDags (explicit DBT_MANIFEST)
 ci/
-  build.py              assembles the deploy tree (deps + parse per project)
+  build.py              assembles the deploy tree; re-parses only changed projects
   slim_manifest.py      optional manifest shrinking (SLIM_MANIFEST=1)
-  publish.sh            commits the tree onto the `deploy` branch
+  publish.sh            freshness check + compare-and-swap commit onto `deploy`
+  deploy.sh             build → test → publish, retried when publish loses a race
+  deploy_status.sh      is deploy an up-to-date build of master's tip?
   parse.env             env for `dbt parse` (non-secret values = prod)
   e2e_merge_strategies.sh  local end-to-end check of all merge strategies
 tests/                  run against the built tree
@@ -48,7 +50,8 @@ PR / merge queue  (.github/workflows/ci.yml)
   diff summary vs current deploy, artifact upload
 
 push to master  (.github/workflows/deploy.yml)  + hourly reconcile + manual
-  build.py → pytest → publish.sh → `deploy` branch ([skip ci])
+  deploy_status → deploy.sh [build.py → pytest → publish.sh, retry on 75] → deploy_status
+  → `deploy` branch ([skip ci])
 
 Airflow: git-sync tracks `deploy`, subPath dags/
 ```
@@ -64,45 +67,94 @@ projects/<name>/…
   dbt_packages/               symlinks dereferenced (dbt deps symlinks local packages)
   target/manifest.json
   target/partial_parse.msgpack
-  target/build-info.json      input hash, dbt version
+  target/build-info.json      dbt version, commit the manifest was built at
 ```
 
 ## Design decisions
 
-### 1. Content-addressed builds, not diff-based ones
-`build.py` gives each project an **input hash**: the bytes of its tracked
-files, its local packages (followed transitively), `requirements/dbt.txt`,
-`ci/parse.env` and the build scripts. If `origin/deploy` already contains a
-build with the same hash, that output is reused byte for byte. Otherwise the
-project is rebuilt.
+### 1. Re-parse only changed projects, diffing against what is *deployed*
+Every deploy commit carries a `Source-Commit:` trailer: the master commit it
+is a build of. `build.py` takes the diff from there:
 
-That gives three properties:
+```
+git diff --name-only <Source-Commit of origin/deploy> <master tip>
+```
 
-* **The merge strategy doesn't matter** (see below). Nothing reads
-  `HEAD~1`, `github.event.before`, or the commit count of a push.
-* **No churn.** `manifest.json` has `generated_at`/`invocation_id`, so a
-  rebuild always changes bytes. Reuse keeps unchanged projects identical, and
-  a no-op merge (README, CI-only change) publishes nothing.
-* **Shared code is handled.** Changing `packages/shared_macros` rebuilds
-  every project that depends on it, even though nothing under `projects/x`
-  changed. A `paths:` filter or a `git diff --name-only` would miss this.
+* changed path under `projects/<name>/` → re-run `dbt deps` + `dbt parse` for that project
+* changed local package it uses (`packages.yml` → `local:`) → re-parse that project
+* changed `requirements/dbt.txt`, `ci/parse.env`, `ci/build.py`, `ci/slim_manifest.py`,
+  or a different dbt version/slim setting recorded in `build-info.json` → re-parse all
+* new project → build it, deleted project → it is simply absent from the new tree
+* anything else → copy the project's files from the current deploy commit,
+  **byte for byte** (`git archive`)
 
-Bump `BUILD_FORMAT` in `build.py`, or run the deploy workflow with
-`full_rebuild`, to force a rebuild of everything.
+The diff is taken against the deployed source and never against `HEAD~1`
+or `github.event.before`. That is what makes it correct for any merge strategy:
 
-### 2. Publish with plumbing, linear, no force
-`publish.sh` writes the tree into a temporary index (`add -f`, because
-projects' `.gitignore` excludes `target/` and `dbt_packages/`), then runs
-`commit-tree` on top of the current deploy tip and does a plain push.
-Each deploy commit carries `Source-Commit:` and `Source-Tree:` trailers.
+| situation | `HEAD~1` diff | diff vs deployed source |
+|---|---|---|
+| squash: 1 commit | ok | ok |
+| merge commit | ok (first parent) | ok |
+| rebase: N commits in one push | **misses N-1 commits** | ok |
+| previous deploy failed / skipped | **misses that push** | ok |
+| master force-pushed | meaningless | ok (tree-to-tree diff needs no ancestry) |
 
-* identical tree → no commit
-* the current deploy's source already contains ours (an old run re-run) → refuse
-* master was force-pushed (old source isn't an ancestor) → deploy the new tip
-* someone else pushed `deploy` meanwhile → push fails, and the next run rebuilds on top
+If the deployed source commit is missing from the clone (shallow checkout,
+or history rewritten and garbage-collected), everything is rebuilt. That is
+why the workflows use `fetch-depth: 0`.
 
-Rollback: `git revert` the deploy commit on `deploy`, or pin git-sync's
-`rev` to an older deploy SHA.
+Re-parsing an unchanged project is avoided on purpose. A manifest is never
+byte-identical between runs (`generated_at`, `invocation_id`), so re-parsing
+everything would turn every deploy into a full diff for git-sync and Airflow.
+
+### 2. How `deploy` stays consistent with master (publish.sh)
+
+**`deploy` is not "master + a commit".** It is its own linear history of
+snapshots. Each commit holds the complete deploy tree, its parent is the
+previous deploy commit, and `Source-Commit:` points at master. The commit is
+made with `write-tree`/`commit-tree` from the build output, so nothing is
+ever *merged* or *rebased* onto anything. There are no content conflicts, and
+the merge strategy on master can't produce any.
+
+Two checks, both in `publish.sh`, keep it consistent:
+
+1. **Freshness.** Publish only if the built source is still `origin/master`'s
+   tip. Otherwise skip (exit 0): the newer commit has its own run queued, and
+   the hourly reconcile is a backstop. A stalled or re-run old job therefore
+   can't publish an old state, even if it wakes up long after.
+2. **Compare-and-swap.** The new commit's parent is the deploy commit the
+   build *read* (`build/deploy.meta.json`). The push is a fast-forward with
+   `--force-with-lease=deploy:<that commit>`, so the server rejects it if
+   deploy moved in the meantime. A rejected run exits 75, and `ci/deploy.sh`
+   rebuilds against the new deploy tip and retries (up to 3 times). It is
+   never overwritten and never merged.
+
+Plus: an identical tree means no commit. So `Source-Commit` can lag master by
+commits that change nothing deployable (README, tests, CI). `ci/deploy_status.sh`
+defines "in sync" exactly: *no deployable path changed between Source-Commit
+and master's tip*. The deploy workflow runs it before and after, and fails if
+drift remains.
+
+Rollback: `git revert` the deploy commit on `deploy` (it fast-forwards), or
+pin git-sync's `rev` to an older deploy SHA. Every deploy commit stays
+reachable because the branch is never rewritten.
+
+#### Why not "deploy = master + 1 generated commit"?
+That model is what causes the problems you'd expect:
+
+* Each new deploy commit sits on a *new* master commit, not on the previous
+  deploy, so pushing it is never a fast-forward. You must force-push every
+  time.
+* A blind force-push has no compare-and-swap. A stalled run that wakes up
+  late overwrites a newer deploy, and deploy is now *behind* master with
+  nothing to detect it.
+* The old deploy commits become unreachable, so rollback-by-SHA breaks once GitHub GCs them.
+* The variant "merge master into deploy, then add a commit" avoids the force,
+  but it inherits master's merge-strategy quirks (rebased/force-pushed master
+  → duplicated history and conflicts on generated paths).
+
+If you need deploy to literally contain master's files, put them in the
+snapshot tree. The model stays the same.
 
 ### 3. Partial parse that actually survives to runtime
 Shipping `partial_parse.msgpack` only helps if dbt accepts it at task time.
@@ -145,47 +197,46 @@ would catch this.
 
 ## Merge strategy: what changes and what doesn't
 
+With the two mechanisms above, **correctness doesn't depend on the merge
+strategy**. `e2e_merge_strategies.sh` checks every row below against a local
+origin.
+
 | | squash | merge commit | rebase |
 |---|---|---|---|
-| commits landing on master per PR | 1 | merge commit (+ PR commits as 2nd parent) | N, new SHAs |
-| deploy runs per PR | 1 | 1 | 1 (one push), but N if commits are pushed one by one |
-| what gets deployed | squash commit | merge commit | tip only. Intermediate commits are never built |
-| `git diff HEAD~1` correct? | yes | yes (first parent) | **no**, only the last commit |
-| PR-branch SHA == deployed SHA? | no | no | no |
-| head-commit message GitHub checks for `[skip ci]` | concatenated PR commit messages (default) | "Merge pull request …" + PR title | the PR's last commit |
-| revert a PR | 1 commit | `revert -m1` the merge | N commits |
-| `Source-Commit` ↔ PR | 1:1 | 1:1 | 1:N |
+| commits landing on master per PR | 1 | merge commit + PR commits | N, new SHAs |
+| deploy runs per PR | 1 | 1 | 1 per push (N if pushed one by one; all but the last skip at the freshness check) |
+| which projects get re-parsed | diff vs deployed source: the same in all three | ← | ← |
+| deploy commit per PR | ≤ 1 | ≤ 1 | ≤ 1 per push (intermediate commits are never deployed) |
+| `Source-Commit` ↔ PR | 1:1 | 1:1 | 1:N (points at the last commit) |
+| `[skip ci]` risk | **high**: squash message contains every PR commit's message | PR title only | last PR commit |
+| revert a PR | 1 commit | `revert -m1` | N commits |
 
-What the design does with each row:
+What remains strategy-dependent is traceability and the `[skip ci]` trap:
 
-* **Change detection**: content hashes, so the `HEAD~1` row doesn't apply.
-  `e2e_merge_strategies.sh` scenario 2 reproduces the rebase trap: a
-  shared-macro commit followed by a marketing commit. `HEAD~1` shows only
-  marketing, yet all three projects are rebuilt.
-* **No SHA equals the PR's SHA**, so "build in the PR, promote the same
-  artifact by SHA on merge" doesn't work with *any* strategy. Content
-  hashing gives the same result in practice: a PR build and the post-merge
-  build have identical input hashes when nothing else landed in between.
-  `Source-Tree` (the tree hash) is the stable identifier if you need one.
-* **`[skip ci]` gotcha**: the most dangerous one under squash. One WIP
-  commit saying `[skip ci]` ends up in the squash message and **silently
-  skips the deploy**. Defended three ways: the `commit-hygiene` PR check, the
-  hourly reconcile run, and `deploy`'s own `[skip ci]` (which only matters for
-  the deploy branch, since workflows only listen on master).
-* **Untested intermediate states (rebase)**: never deployed, because only
-  the tip is built. Still, use a merge queue (`merge_group` is in `ci.yml`)
-  or "require branches to be up to date", so the tested tree is the
-  merged tree.
-* **Bursts of merges**: `concurrency: deploy` with `cancel-in-progress:
-  false`. A running publish is never killed, and pending runs collapse to the
-  newest.
-* **Force-push / history rewrite** (e.g. a rebase-heavy flow that rewrites
-  master): `publish.sh` sees that the previous source is no longer an ancestor
-  and deploys the new tip (scenario 5).
+* **`[skip ci]`**: GitHub skips push workflows when the head commit message
+  contains it. Under squash, one WIP commit saying `[skip ci]` would skip
+  the deploy. Mitigated by the `commit-hygiene` PR check and the hourly
+  reconcile. Because of the diff-vs-deployed rule, the reconcile picks up
+  the skipped changes.
+* **Rebase**: intermediate commits are never tested or deployed. Use the merge
+  queue (`merge_group` in `ci.yml`) or "require branches up to date".
 
-**Recommendation:** squash merges + merge queue. You get 1 PR = 1 master
-commit = 1 deploy commit, a one-commit revert, and the clearest audit trail. The
-pipeline stays correct with merge or rebase too. Those mainly cost traceability.
+**Recommendation:** squash + merge queue. 1 PR = 1 master commit = ≤ 1 deploy
+commit, a one-commit revert, and a 1:1 audit trail.
+
+### Scenarios checked by `ci/e2e_merge_strategies.sh`
+
+| # | scenario | outcome |
+|---|---|---|
+| 0 | first deploy | all built |
+| 1 | squash merge of a finance change | only finance re-parsed; core/marketing bytes unchanged |
+| 2 | rebase merge: shared-macro commit, then a marketing commit | `HEAD~1` shows only marketing; all 3 re-parsed |
+| 3 | merge commit, README only | no deploy commit; status "in sync" |
+| 4 | one push's deploy failed, next push lands | status "drift"; both pushes' projects re-parsed |
+| 5 | stalled run built X, Y deployed meanwhile, X publishes late | skipped (freshness) |
+| 6 | two runs build the same tip and race | loser rejected (exit 75), retries, no-op |
+| 7 | add a project / delete a project | built / removed |
+| 8 | master force-pushed | new tip deployed |
 
 ## Operational settings (Airflow)
 See `deploy/airflow/values.yaml`: `min_file_process_interval: 600`,
@@ -196,9 +247,9 @@ processor, git-sync on `deploy` with `subPath: dags`.
 
 ```bash
 pip install -r requirements/dbt.txt -r requirements/airflow.txt
-python ci/build.py --out build/deploy            # add --slim to try slimming
+python ci/build.py --out build/deploy --previous origin/deploy   # --slim, --no-reuse
 DEPLOY_DIR=build/deploy pytest
-bash ci/e2e_merge_strategies.sh                  # ~45s, no network needed
+bash ci/e2e_merge_strategies.sh                  # ~70s, no network needed
 ```
 
 ## Branch protection
@@ -209,7 +260,7 @@ bash ci/e2e_merge_strategies.sh                  # ~45s, no network needed
 
 ## Future options
 * **Kubernetes execution mode**: CI also builds a dbt image (projects +
-  dbt_packages) tagged with the input hash and writes the tag into
+  dbt_packages) tagged with the deploy commit and writes the tag into
   `build-info.json` next to the manifest, so DAGs, manifest and image always
   match. The Airflow image no longer needs dbt.
 * **No per-model tasks needed?** Use one pod per selector (`dbt build
