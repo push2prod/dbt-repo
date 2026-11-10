@@ -49,7 +49,10 @@ DEFAULTS: dict[str, Any] = {
 
 @functools.cache
 def load_config(project: str) -> dict[str, Any]:
-    return yaml.safe_load((CONFIG_DIR / f"{project}.yml").read_text())
+    cfg = yaml.safe_load((CONFIG_DIR / f"{project}.yml").read_text())
+    if not isinstance(cfg, dict) or not isinstance(cfg.get("dags"), list):
+        raise ValueError(f"dags/config/{project}.yml must be a mapping with a `dags` list")
+    return cfg
 
 
 def dag_specs(project: str) -> list[dict[str, Any]]:

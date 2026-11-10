@@ -46,6 +46,26 @@ jobs:
             echo "::error::skip-ci marker found; it would skip the deploy after merge:"; echo "$bad"; exit 1
           fi
 
+  lint:
+    # ruff (lint + format), mypy --strict, shellcheck, size limits.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements/*.txt
+      - name: Install Airflow side + dev tools (mypy checks DAGs against real Airflow)
+        run: pip install -q -r requirements/airflow.txt -r requirements/dev.txt -c "$AIRFLOW_CONSTRAINTS"
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: mypy
+      - name: shellcheck
+        run: git ls-files -z '*.sh' strain/k8s_pod/airflow | xargs -0 shellcheck
+      - name: size limits
+        run: python ci/check_lengths.py
+
   build-and-test:
     runs-on: ubuntu-latest
     steps:

@@ -1,0 +1,54 @@
+# Tool config only: this repo is not a Python package.
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+  "E", "W",   # pycodestyle
+  "F",        # pyflakes
+  "I",        # import order
+  "B",        # bugbear
+  "UP",       # pyupgrade
+  "SIM",      # simplify
+  "C4",       # comprehensions
+  "N",        # naming
+  "ANN",      # every function annotated (type hints are mandatory)
+  "RUF",
+  "PLE", "PLW",
+  "PLR0913",  # too many arguments
+]
+
+[tool.ruff.lint.per-file-ignores]
+# pytest functions take one argument per fixture they use.
+"tests/*" = ["PLR0913"]
+
+[tool.ruff.format]
+# `ruff format` is the formatter; CI runs `ruff format --check`.
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+# DAG files import `dbt_factory` from dags/ (Airflow puts dags/ on sys.path),
+# tests import `conftest` and `buildlib` (ci/) as top-level modules, and
+# strain/run.py imports its sibling modules the same way.
+mypy_path = "dags:tests:ci:strain"
+explicit_package_bases = true
+files = ["ci", "dags", "strain", "tests"]
+
+[[tool.mypy.overrides]]
+# astronomer-cosmos ships no type information (no py.typed).
+module = ["cosmos", "cosmos.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Airflow 2.10 pins SQLAlchemy 1.4, which ships no type information.
+module = ["sqlalchemy", "sqlalchemy.*"]
+ignore_missing_imports = true
+
+# Size limits, enforced by ci/check_lengths.py
+[tool.repo-limits]
+max-function-lines = 60
+max-file-lines = 300

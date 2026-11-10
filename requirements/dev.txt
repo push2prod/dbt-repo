@@ -1,0 +1,7 @@
+# Lint / type / size checks, installed next to requirements/airflow.txt
+# (mypy type-checks the DAGs against the real Airflow 2.10 package).
+ruff==0.17.4
+mypy==2.4.1
+types-PyYAML==6.0.12.20261103
+shellcheck-py==0.11.0.1
+pre-commit==4.7.0

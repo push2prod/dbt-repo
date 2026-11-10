@@ -24,6 +24,8 @@ dags/
   dbt_factory/          builds Cosmos DbtDags (explicit DBT_MANIFEST)
 ci/
   build.py              assembles the deploy tree; re-parses only changed projects
+  buildlib.py           git / file / dbt-venv helpers for build.py
+  check_lengths.py      size limits: functions <= 60 lines, files <= 300
   publish.sh            freshness check + compare-and-swap commit onto `deploy`
   deploy.sh             build → test → publish, retried when publish loses a race
   deploy_status.sh      is deploy an up-to-date build of master's tip?
@@ -31,6 +33,8 @@ ci/
   e2e_merge_strategies.sh  local end-to-end check of all merge strategies
 tests/                  run against the built tree
 strain/                 real Airflow 2.10 strain test (see below)
+pyproject.toml          ruff + mypy config, size limits
+.pre-commit-config.yaml same checks locally
 requirements/dbt.txt    the single dbt pin; its own venv in CI and on the image
 requirements/airflow.txt  Airflow 2.10.5 + Cosmos 1.15.1
 deploy/airflow/values.yaml  git-sync + [scheduler] parsing settings for 2.10
@@ -40,6 +44,7 @@ deploy/airflow/values.yaml  git-sync + [scheduler] parsing settings for 2.10
 
 ```
 PR / merge queue  (.github/workflows/ci.yml)
+  lint                     ruff, ruff format, mypy --strict, shellcheck, size limits
   build.py --previous origin/deploy  → build/deploy
   pytest:
     test_dag_integrity     DagBag import, no import errors, parse budget,
@@ -84,7 +89,7 @@ git diff --name-only <Source-Commit of origin/deploy> <master tip>
 
 * changed path under `projects/<name>/` → re-run `dbt deps` + `dbt parse` for that project
 * changed local package it uses (`packages.yml` → `local:`) → re-parse that project
-* changed `requirements/dbt.txt`, `ci/parse.env`, `ci/build.py`,
+* changed `requirements/dbt.txt`, `ci/parse.env`, `ci/build.py`, `ci/buildlib.py`,
   or a different dbt version recorded in `build-info.json` → re-parse all
 * new project → build it, deleted project → it is simply absent from the new tree
 * anything else → copy the project's files from the current deploy commit,
@@ -320,8 +325,9 @@ git-sync on `deploy` with `subPath: dags`, `depth: 1` and a short
 
 ```bash
 python -m venv /opt/dbt-venv && /opt/dbt-venv/bin/pip install -r requirements/dbt.txt
-pip install -r requirements/airflow.txt \
+pip install -r requirements/airflow.txt -r requirements/dev.txt \
   -c https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.12.txt
+pre-commit install                               # ruff, mypy, shellcheck, size limits on commit
 export DBT_BIN=/opt/dbt-venv/bin/dbt DBT_EXECUTABLE=/opt/dbt-venv/bin/dbt
 python ci/build.py --out build/deploy --previous origin/deploy   # --no-reuse to rebuild all
 DEPLOY_DIR=build/deploy pytest
@@ -329,8 +335,25 @@ bash ci/e2e_merge_strategies.sh                  # ~70s, no network needed
 DBT_VENV=/opt/dbt-venv python strain/run.py      # ~5 min, needs Postgres binaries
 ```
 
+## Code quality
+
+All of it runs in the `lint` CI job and as pre-commit hooks (`pre-commit install`).
+Tool versions are pinned in `requirements/dev.txt`; the hooks use your env,
+so local and CI results match.
+
+| rule | tool | where |
+|---|---|---|
+| lint (pycodestyle, pyflakes, bugbear, import order, naming, ...) | `ruff check` | `pyproject.toml` |
+| formatting | `ruff format --check` | line length 120 |
+| type hints on every function | ruff `ANN` + `mypy --strict` | DAGs are checked against real Airflow 2.10. Cosmos and SQLAlchemy 1.4 ship no types, so they are treated as untyped |
+| shell scripts | `shellcheck` | every `*.sh` and `strain/k8s_pod/airflow` |
+| function ≤ 60 lines, file ≤ 300 lines | `ci/check_lengths.py` | Python functions incl. methods and nested ones; files = Python + shell. Limits in `[tool.repo-limits]` |
+
+SQL models aren't linted yet. `sqlfluff` with the jinja templater would be the
+next step.
+
 ## Branch protection
-* `master`: require `ci / build-and-test` and `ci / commit-hygiene`; enable
+* `master`: require `ci / lint`, `ci / build-and-test` and `ci / commit-hygiene`; enable
   the merge queue; pick squash as the only allowed merge method (recommended).
 * `deploy`: only `github-actions[bot]` may push; no force pushes; nobody
   commits by hand. It is build output.

@@ -1,0 +1,32 @@
+# Same tools and versions as CI (requirements/dev.txt), run from your env:
+#   pip install -r requirements/airflow.txt -r requirements/dev.txt -c <airflow constraints>
+#   pre-commit install
+repos:
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff (lint)
+        entry: ruff check --fix
+        language: system
+        types: [python]
+      - id: ruff-format
+        name: ruff (format)
+        entry: ruff format
+        language: system
+        types: [python]
+      - id: mypy
+        name: mypy (strict)
+        entry: mypy
+        language: system
+        types: [python]
+        pass_filenames: false   # whole-project check, config in pyproject.toml
+      - id: shellcheck
+        name: shellcheck
+        entry: shellcheck
+        language: system
+        types: [shell]
+      - id: lengths
+        name: size limits (function <= 60, file <= 300 lines)
+        entry: python ci/check_lengths.py
+        language: system
+        types_or: [python, shell]

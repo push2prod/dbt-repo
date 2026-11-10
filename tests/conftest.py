@@ -7,13 +7,19 @@ bytes that get pushed to the deploy branch.
 
 from __future__ import annotations
 
+import importlib.util
 import os
-import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
+from buildlib import DBT_BIN, load_env_file
 
 REPO = Path(__file__).resolve().parent.parent
+PROJECTS = sorted(p.parent.name for p in (REPO / "projects").glob("*/dbt_project.yml"))
+
+DagSpecs = Callable[[str], list[dict[str, Any]]]
 
 
 @pytest.fixture(scope="session")
@@ -26,18 +32,12 @@ def deploy_dir() -> Path:
 
 @pytest.fixture(scope="session")
 def parse_env() -> dict[str, str]:
-    sys.path.insert(0, str(REPO / "ci"))
-    from build import load_env_file
-
     return load_env_file(Path(os.environ.get("PARSE_ENV", REPO / "ci" / "parse.env")))
 
 
 @pytest.fixture(scope="session")
 def dbt_bin() -> str:
     """dbt from its own venv (DBT_BIN), as on the Airflow image."""
-    sys.path.insert(0, str(REPO / "ci"))
-    from build import DBT_BIN
-
     return DBT_BIN
 
 
@@ -45,18 +45,16 @@ def projects(deploy: Path) -> list[str]:
     return sorted(p.parent.name for p in (deploy / "projects").glob("*/dbt_project.yml"))
 
 
-def load_dag_specs(dags_dir: Path):
+def load_dag_specs(dags_dir: Path) -> DagSpecs:
     """Import dags/dbt_factory under a private name.
 
     That way the DagBag test still imports the real `dbt_factory` from the
     deploy tree, not this cached copy from the repo.
     """
-    import importlib.util
-
     spec = importlib.util.spec_from_file_location("_dbt_factory_specs", dags_dir / "dbt_factory" / "__init__.py")
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load dbt_factory from {dags_dir}")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    return mod.dag_specs
-
-
-PROJECTS = sorted(p.parent.name for p in (REPO / "projects").glob("*/dbt_project.yml"))
+    specs: DagSpecs = mod.dag_specs
+    return specs
