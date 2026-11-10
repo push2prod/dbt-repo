@@ -14,7 +14,8 @@ for attempt in 1 2 3; do
   echo "== deploy attempt $attempt"
   git fetch --quiet origin "+refs/heads/deploy:refs/remotes/origin/deploy" 2>/dev/null || true
   python ci/build.py --out "$OUT" --previous origin/deploy "$@"
-  if [[ -z "${SKIP_TESTS:-}" ]]; then DEPLOY_DIR=$OUT pytest -q; fi
+  # No bytecode in the tree we are about to publish (publish.sh also excludes it).
+  if [[ -z "${SKIP_TESTS:-}" ]]; then PYTHONDONTWRITEBYTECODE=1 DEPLOY_DIR=$OUT pytest -q -p no:cacheprovider; fi
   rc=0; bash ci/publish.sh "$OUT" || rc=$?
   [[ $rc -eq 75 ]] || exit $rc
 done

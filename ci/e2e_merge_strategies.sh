@@ -9,6 +9,7 @@
 #  2. rebase merge, 2 commits in one push           -> HEAD~1 shows only marketing, but the
 #     (shared macro, then marketing)                   earlier shared-macro commit rebuilds all 3
 #  3. merge commit, README only                     -> nothing published, status "in sync"
+#  3b. bytecode in the build (tests import the DAGs) -> not published
 #  4. deploy skipped/failed for one push, then the  -> both finance and core rebuilt
 #     next push lands                                  (diff vs *deployed* source, not HEAD~1)
 #  5. stalled run: built at X, master moved to Y    -> late publish of X is skipped
@@ -70,6 +71,13 @@ BEFORE=$(deploy_tip)
 deploy
 expect "$(deploy_tip)" "$BEFORE" "no deploy commit for a no-op merge"
 bash ci/deploy_status.sh | sed 's/^/  /'
+
+echo "== 3b. bytecode written into the build (e.g. by the tests) is never published"
+build_only "$WORK/pyc"
+mkdir -p "$WORK/pyc/dags/__pycache__" && echo junk > "$WORK/pyc/dags/__pycache__/dbt_core.cpython-312.pyc"
+publish_only "$WORK/pyc"
+expect "$(deploy_tip)" "$BEFORE" "no deploy commit for __pycache__/*.pyc"
+expect "$(git ls-tree -r --name-only origin/deploy | grep -c '\.pyc$' || true)" "0" "deploy branch holds no .pyc"
 
 echo "== 4. one push never deployed (failed/skipped run), then next push"
 echo "-- a" >> projects/finance/models/marts/fct_invoices.sql && git commit -qam "finance change (deploy failed)" && merge_pr

@@ -66,7 +66,10 @@ INDEX=$(mktemp)
 trap 'rm -f "$INDEX"' EXIT
 rm -f "$INDEX"
 # add -f: projects ship target/ and dbt_packages/, which their .gitignore excludes.
-GIT_INDEX_FILE=$INDEX git --work-tree="$BUILD_DIR" add -A -f .
+# Never stage Python bytecode: importing the DAGs (tests, Airflow) writes
+# __pycache__/*.pyc into the tree, and their embedded timestamps would make
+# every run look like a change.
+GIT_INDEX_FILE=$INDEX git --work-tree="$BUILD_DIR" add -A -f -- . ':(exclude,glob)**/__pycache__/**' ':(exclude,glob)**/*.pyc'
 TREE=$(GIT_INDEX_FILE=$INDEX git write-tree)
 
 if [[ -n "$BASE" && "$(git rev-parse "$BASE^{tree}")" == "$TREE" ]]; then
