@@ -43,8 +43,10 @@ webserver:
         port: 8080
         targetPort: 8080
         nodePort: 30080
+  # Same CPU request as production: below that, the liveness probe times out on a
+  # saturated node and Kubernetes restarts the webserver (seen in an e2e run at 200m).
   resources:
-    requests: {cpu: 200m, memory: 1Gi}
+    requests: {cpu: 500m, memory: 1Gi}
 
 # Small requests so a 4-CPU / 16 GB runner fits the control plane plus
 # E2E_PARALLELISM task pods. The DAG processor keeps its production sizing

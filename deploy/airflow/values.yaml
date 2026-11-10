@@ -77,6 +77,14 @@ dagProcessor:
     limits:
       memory: 4Gi
 
+webserver:
+  resources:
+    # Enough CPU that /health answers its liveness probe while task pods saturate
+    # the node; at 200m the e2e stress test saw the webserver restarted.
+    requests:
+      cpu: 500m
+      memory: 1Gi
+
 workers:
   # With the KubernetesExecutor this is the task *pod* spec: one pod per Cosmos
   # task, i.e. one dbt invocation. Cosmos' partial-parse cache lives in the
