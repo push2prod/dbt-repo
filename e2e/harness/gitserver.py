@@ -59,7 +59,25 @@ def deploy_git_server(api: client.ApiClient) -> None:
         if dep.status is not None and (dep.status.ready_replicas or 0) >= 1:
             return
         time.sleep(2)
-    raise TimeoutError("git-server did not become ready")
+    raise TimeoutError(f"git-server did not become ready:\n{pod_report(core, 'app=git-server')}")
+
+
+def pod_report(core: client.CoreV1Api, selector: str) -> str:
+    """Phase, container states, recent events and log tail of the pods matching ``selector``."""
+    lines = []
+    for pod in core.list_namespaced_pod(s.NAMESPACE, label_selector=selector).items:
+        name = pod.metadata.name if pod.metadata and pod.metadata.name else "?"
+        status = pod.status
+        lines.append(f"pod {name}: {status.phase if status else '?'}")
+        for cs in (status.container_statuses or []) if status else []:
+            lines.append(f"  {cs.name}: ready={cs.ready} restarts={cs.restart_count} state={cs.state}")
+        events = core.list_namespaced_event(s.NAMESPACE, field_selector=f"involvedObject.name={name}").items
+        lines += [f"  event {e.type} {e.reason}: {e.message}" for e in events[-8:]]
+        try:
+            lines.append("  log: " + str(core.read_namespaced_pod_log(name, s.NAMESPACE, tail_lines=30)))
+        except client.ApiException as e:
+            lines.append(f"  log: <{e.reason}>")
+    return "\n".join(lines) or f"no pods match {selector}"
 
 
 class Syncer:

@@ -34,3 +34,4 @@ def dump(api: client.ApiClient, dest: Path) -> None:
             obj = e.involved_object
             lines.append(f"EVENT {e.type} {obj.kind}/{obj.name}: {e.reason} {e.message}")
     (dest / "pods-and-events.txt").write_text("\n".join(lines) + "\n")
+    print("[e2e] diagnostics:\n  " + "\n  ".join(lines[-80:]), flush=True)  # also in the CI log
