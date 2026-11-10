@@ -19,9 +19,10 @@ from e2e.harness import settings as s
 REPO_NAME = "airflow.git"
 IN_CLUSTER_URL = f"git://git-server.{s.NAMESPACE}.svc.cluster.local:9418/{REPO_NAME}"
 
+_ROOT = "/srv/git"  # an emptyDir: the image runs as a non-root user
 _SERVE = (
-    f"git init --bare /srv/{REPO_NAME} && git -C /srv/{REPO_NAME} symbolic-ref HEAD refs/heads/deploy && "
-    "exec git daemon --reuseaddr --export-all --enable=receive-pack --base-path=/srv /srv"
+    f"git init -q --bare {_ROOT}/{REPO_NAME} && git -C {_ROOT}/{REPO_NAME} symbolic-ref HEAD refs/heads/deploy && "
+    f"exec git daemon --reuseaddr --export-all --enable=receive-pack --base-path={_ROOT} {_ROOT}"
 )
 
 
@@ -31,12 +32,18 @@ def deploy_git_server(api: client.ApiClient) -> None:
     container = client.V1Container(
         name="git",
         image=s.GIT_SERVER_IMAGE,
-        command=["sh", "-c", _SERVE],
+        command=["bash", "-c", _SERVE],
+        image_pull_policy="IfNotPresent",
         ports=[client.V1ContainerPort(container_port=9418)],
+        volume_mounts=[client.V1VolumeMount(name="repo", mount_path=_ROOT)],
         readiness_probe=client.V1Probe(tcp_socket=client.V1TCPSocketAction(port=9418), period_seconds=2),
     )
     pod = client.V1PodTemplateSpec(
-        metadata=client.V1ObjectMeta(labels=labels), spec=client.V1PodSpec(containers=[container])
+        metadata=client.V1ObjectMeta(labels=labels),
+        spec=client.V1PodSpec(
+            containers=[container],
+            volumes=[client.V1Volume(name="repo", empty_dir=client.V1EmptyDirVolumeSource())],
+        ),
     )
     spec = client.V1DeploymentSpec(replicas=1, selector=client.V1LabelSelector(match_labels=labels), template=pod)
     apps.create_namespaced_deployment(

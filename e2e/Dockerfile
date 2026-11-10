@@ -8,6 +8,8 @@ COPY requirements/airflow-image.txt requirements/dbt.txt /tmp/requirements/
 RUN pip install --no-cache-dir -r /tmp/requirements/airflow-image.txt --constraint "${AIRFLOW_CONSTRAINTS}"
 
 USER root
+# git: the e2e git server runs on this image (Debian's git includes `git daemon`).
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends git && rm -rf /var/lib/apt/lists/*
 RUN python -m venv /opt/dbt-venv \
  && /opt/dbt-venv/bin/pip install --no-cache-dir -r /tmp/requirements/dbt.txt \
  && chown -R airflow: /opt/dbt-venv

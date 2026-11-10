@@ -77,7 +77,12 @@ def _bring_up(workdir: Path, cluster: Cluster) -> Stack:
 def stack(tmp_path_factory: pytest.TempPathFactory, request: pytest.FixtureRequest) -> Iterator[Stack]:
     workdir = tmp_path_factory.mktemp("e2e")
     with Cluster(workdir) as cluster:
-        st = _bring_up(workdir, cluster)
+        try:
+            st = _bring_up(workdir, cluster)
+        except Exception:
+            if cluster.api is not None:
+                dump(cluster.api, s.REPORT_PATH.parent / "e2e-diag")
+            raise
         try:
             yield st
         finally:

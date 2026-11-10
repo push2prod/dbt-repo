@@ -10,8 +10,9 @@ REPO = Path(__file__).resolve().parents[2]
 # Images. Override with E2E_* env vars (e.g. to point at an internal registry).
 K3S_IMAGE = os.environ.get("E2E_K3S_IMAGE", "rancher/k3s:v1.31.4-k3s1")
 POSTGRES_IMAGE = os.environ.get("E2E_POSTGRES_IMAGE", "postgres:16-alpine")
-GIT_SERVER_IMAGE = os.environ.get("E2E_GIT_SERVER_IMAGE", "alpine/git:v2.47.2")
 AIRFLOW_IMAGE = "dbt-repo-airflow:e2e"  # built by the test from e2e/Dockerfile
+# The git server runs on the same image (it has git + `git daemon`): already in k3s, no pull.
+GIT_SERVER_IMAGE = os.environ.get("E2E_GIT_SERVER_IMAGE", AIRFLOW_IMAGE)
 CHART_URL = os.environ.get(
     "E2E_CHART_URL", "https://archive.apache.org/dist/airflow/helm-chart/1.16.0/airflow-1.16.0.tgz"
 )
