@@ -1,87 +1,59 @@
-# Build the deploy tree from master and publish it to the `deploy` branch,
-# which git-sync (or an Airflow 3 GitDagBundle) tracks.
-#
-# Runs once per push to master, whatever the merge strategy:
-#   squash -> 1 new commit, rebase -> N new commits, merge -> merge commit + PR commits.
-# Only master's tip is ever deployed. What gets re-parsed is decided by
-# diffing against the *deployed* source commit (the Source-Commit trailer on
-# deploy), not `HEAD~1` or `github.event.before`. So the number of commits per
-# push, skipped or failed runs, and force-pushes don't matter. Consistency and
-# races are handled in ci/publish.sh (freshness check + compare-and-swap push).
+# Push to master: build the bundle, validate it, commit it to the `deploy` branch
+# that git-sync tracks. GitLab equivalent: the `deploy` job in .gitlab-ci.yml.
 name: deploy
 
 on:
   push:
     branches: [master]
-  # Reconcile: catches a deploy that was skipped (a skip-ci marker in a
-  # squash message, a failed run, a direct push). Cheap: only changed projects
-  # are re-parsed, and an unchanged tree publishes nothing.
-  schedule:
-    - cron: "17 * * * *"
   workflow_dispatch:
-    inputs:
-      full_rebuild:
-        description: "Rebuild every project, ignoring previous builds"
-        type: boolean
-        default: false
 
-# One deploy at a time. With cancel-in-progress: false, a running publish is
-# never killed halfway, and GitHub keeps only the *newest* pending run, so a
-# burst of merges collapses into: the current run, then the latest one.
+# One deploy at a time; a burst of merges collapses to the newest pending run.
 concurrency:
   group: deploy
   cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: write   # push to `deploy` with the workflow's GITHUB_TOKEN
 
 env:
   PYTHON_VERSION: "3.12"
   AIRFLOW_CONSTRAINTS: https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.12.txt
+  DBT_SOURCE: e2e/fixtures
+  PYTHONDONTWRITEBYTECODE: "1"
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          # Always build master's current tip. A run for an older push that
-          # starts late just builds the newer tip (same result as the newer
-          # run, which then has nothing to do).
-          ref: master
-          fetch-depth: 0
-
       - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-          cache-dependency-path: requirements/*.txt
-
-      - name: Install pinned toolchain (two venvs, like the Airflow image)
+        with: {python-version: "${{ env.PYTHON_VERSION }}", cache: pip, cache-dependency-path: requirements/*.txt}
+      - name: Install (dbt in its own venv, like the Airflow image)
         run: |
           python -m venv "$RUNNER_TEMP/dbt-venv"
           "$RUNNER_TEMP/dbt-venv/bin/pip" install -q -r requirements/dbt.txt
           pip install -q -r requirements/airflow.txt -c "$AIRFLOW_CONSTRAINTS"
           echo "DBT_BIN=$RUNNER_TEMP/dbt-venv/bin/dbt" >> "$GITHUB_ENV"
           echo "DBT_EXECUTABLE=$RUNNER_TEMP/dbt-venv/bin/dbt" >> "$GITHUB_ENV"
-
-      - name: Deployed vs master (before)
-        run: bash ci/deploy_status.sh || true
-
-      - name: Build, test, publish (retries if it loses a race)
-        env:
-          GIT_AUTHOR_NAME: github-actions[bot]
-          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
-          AIRFLOW_HOME: ${{ runner.temp }}/airflow
-        run: bash ci/deploy.sh ${{ inputs.full_rebuild && '--no-reuse' || '' }}
-
-      - name: Deployed vs master (after)
-        # Fails only if a deployable change is still missing and this run
-        # really built the tip. If master moved during the run, the newer
-        # run (queued behind this one) is responsible.
+      - name: Check out the deploy branch (previous bundle)
         run: |
-          if [ "$(git ls-remote origin refs/heads/master | cut -f1)" = "$(git rev-parse HEAD)" ]; then
-            bash ci/deploy_status.sh
-          else
-            echo "master moved during this run; the next run deploys it"
+          if git fetch -q origin deploy; then git worktree add -q -B deploy build/deploy FETCH_HEAD
+          else git worktree add -q --orphan -b deploy build/deploy; fi
+      - name: Generate bundle (only changed projects re-parsed)
+        run: python -m manifest.generate --source "$DBT_SOURCE" --out build/bundle --previous build/deploy
+      - name: Validate bundle
+        env: {BUNDLE_DIR: build/bundle, AIRFLOW_HOME: "${{ runner.temp }}/airflow"}
+        run: pytest
+      - name: Commit and push to deploy
+        run: |
+          if [ "$(git ls-remote origin refs/heads/master | cut -f1)" != "$GITHUB_SHA" ]; then
+            echo "master moved on during this run; the newer run deploys"; exit 0
           fi
+          cd build/deploy
+          git rm -rq --ignore-unmatch .
+          cp -a ../bundle/. .
+          git add -A -f
+          if git diff --cached --quiet; then echo "bundle unchanged; nothing to deploy"; exit 0; fi
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q -m "deploy: ${GITHUB_SHA::12} [skip ci]" -m "Source-Commit: $GITHUB_SHA"
+          git push origin deploy

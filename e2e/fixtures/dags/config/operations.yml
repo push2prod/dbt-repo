@@ -1,0 +1,18 @@
+# DAGs for the operations project. Each domain is owned by exactly one DAG, so all DAGs
+# can run at the same time without two runs rebuilding the same table.
+defaults:
+  tags: [dbt, operations]
+dags:
+  - dag_id: dbt_operations_shipping
+    schedule: "0 6 * * *"
+    select: ["tag:shipping"]
+  - dag_id: dbt_operations_support
+    schedule: "15 6 * * *"
+    select: ["path:models/support"]
+  - dag_id: dbt_operations_warehouse
+    schedule: "30 6 * * *"
+    select: ["+warehouse_summary"]
+  - dag_id: dbt_operations_procurement
+    schedule: "45 6 * * *"
+    select: ["tag:procurement"]
+    exclude: ["tag:deprecated"]

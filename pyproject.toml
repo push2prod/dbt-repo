@@ -22,7 +22,7 @@ select = [
 
 [tool.ruff.lint.per-file-ignores]
 # pytest functions take one argument per fixture they use.
-"tests/*" = ["PLR0913"]
+"ci/checks/*" = ["PLR0913"]
 
 [tool.ruff.format]
 # `ruff format` is the formatter; CI runs `ruff format --check`.
@@ -31,12 +31,12 @@ select = [
 python_version = "3.12"
 strict = true
 warn_unreachable = true
-# DAG files import `dbt_factory` from dags/ (Airflow puts dags/ on sys.path),
-# tests import `conftest` and `buildlib` (ci/) as top-level modules, and
-# strain/run.py imports its sibling modules the same way.
-mypy_path = "dags:tests:ci:strain"
+# DAG files import `dbt_factory` from dags/ (Airflow puts dags/ on sys.path);
+# ci/checks import `conftest` / sibling test modules as top-level modules.
+# `manifest` and `e2e` are packages imported from the repo root.
+mypy_path = "dags:ci/checks"
 explicit_package_bases = true
-files = ["ci", "dags", "strain", "tests"]
+files = ["ci", "dags", "manifest", "e2e"]
 
 [[tool.mypy.overrides]]
 # astronomer-cosmos ships no type information (no py.typed).
@@ -44,8 +44,8 @@ module = ["cosmos", "cosmos.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-# Airflow 2.10 pins SQLAlchemy 1.4, which ships no type information.
-module = ["sqlalchemy", "sqlalchemy.*"]
+# No type information: the kubernetes client and the docker SDK (e2e).
+module = ["kubernetes", "kubernetes.*", "docker", "docker.*"]
 ignore_missing_imports = true
 
 # Size limits, enforced by ci/check_lengths.py

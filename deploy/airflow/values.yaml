@@ -19,8 +19,10 @@ dags:
   gitSync:
     enabled: true
     repo: https://github.com/push2prod/dbt-repo.git
-    branch: deploy          # build output only, written by .github/workflows/deploy.yml
-    rev: HEAD
+    # git-sync v4 (chart >= 1.11) reads `ref`; the chart's default is "v2-2-stable",
+    # so without it git-sync never syncs `deploy`. `branch` only feeds the v3 variable.
+    ref: deploy             # build output only, written by the deploy CI job
+    branch: deploy
     depth: 1
     subPath: dags           # dags_folder = <repo>/dags; projects/ sits next to it
     period: 60s

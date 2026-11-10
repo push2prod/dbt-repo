@@ -1,0 +1,2 @@
+description: a shared-package change re-parses every project that uses it, without changing any DAG
+rebuilt_projects: [core, finance, marketing, operations, product]

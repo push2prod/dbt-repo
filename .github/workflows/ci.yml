@@ -1,14 +1,12 @@
-# PR validation. Builds the exact deploy tree a merge would publish and tests it.
-#
-# merge_group: with a merge queue, GitHub tests the *queued result* (base +
-# every PR ahead of it). That makes squash, merge and rebase all safe: what
-# gets tested is what lands on master.
+# Pull requests: lint + build the bundle (vs. what is deployed) + validate it.
+# GitLab equivalent: .gitlab-ci.yml (lint, validate).
 name: ci
 
 on:
   pull_request:
     branches: [master]
   merge_group:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
@@ -19,21 +17,18 @@ permissions:
 
 env:
   PYTHON_VERSION: "3.12"
-  AIRFLOW_CONSTRAINTS: https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.12.txt   # keep equal to the Airflow image's Python
+  AIRFLOW_CONSTRAINTS: https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.12.txt
+  DBT_SOURCE: e2e/fixtures   # the dbt content to build; a real dbt repo uses "."
+  PYTHONDONTWRITEBYTECODE: "1"
 
 jobs:
   commit-hygiene:
-    # GitHub skips *push* workflows when the head commit message contains a
-    # skip marker. Squash merges paste every PR commit message into the squash
-    # commit, so one "[skip ci]" in a WIP commit would silently skip the
-    # deploy. Rebase merges make the PR's last commit the head commit, with
-    # the same effect. Catch it here.
+    # A "[skip ci]" in a PR commit ends up in the squash commit and silently skips the deploy.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+        with: {fetch-depth: 0}
       - name: No skip-ci markers in PR title or commits
         env:
           TITLE: ${{ github.event.pull_request.title }}
@@ -42,75 +37,42 @@ jobs:
         run: |
           pattern='\[(skip ci|ci skip|no ci|skip actions|actions skip)\]|skip-checks: *true'
           bad=$( { echo "$TITLE"; git log --format=%B "$BASE..$HEAD"; } | grep -iE "$pattern" || true)
-          if [ -n "$bad" ]; then
-            echo "::error::skip-ci marker found; it would skip the deploy after merge:"; echo "$bad"; exit 1
-          fi
+          if [ -n "$bad" ]; then echo "::error::skip-ci marker found:"; echo "$bad"; exit 1; fi
 
   lint:
-    # ruff (lint + format), mypy --strict, shellcheck, size limits.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-          cache-dependency-path: requirements/*.txt
-      - name: Install Airflow side + dev tools (mypy checks DAGs against real Airflow)
-        run: pip install -q -r requirements/airflow.txt -r requirements/dev.txt -c "$AIRFLOW_CONSTRAINTS"
+        with: {python-version: "${{ env.PYTHON_VERSION }}", cache: pip, cache-dependency-path: requirements/*.txt}
+      - run: pip install -q -r requirements/airflow.txt -r requirements/e2e.txt -r requirements/dev.txt -c "$AIRFLOW_CONSTRAINTS"
       - run: ruff check .
       - run: ruff format --check .
       - run: mypy
-      - name: shellcheck
-        run: git ls-files -z '*.sh' strain/k8s_pod/airflow | xargs -0 shellcheck
-      - name: size limits
-        run: python ci/check_lengths.py
+      - run: git ls-files -z '*.sh' | xargs -0 --no-run-if-empty shellcheck
+      - run: python ci/check_lengths.py
 
-  build-and-test:
+  validate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0   # need origin/deploy (reuse) and history (stale guard)
-
       - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-          cache-dependency-path: requirements/*.txt
-
-      - name: Install pinned toolchain (two venvs, like the Airflow image)
+        with: {python-version: "${{ env.PYTHON_VERSION }}", cache: pip, cache-dependency-path: requirements/*.txt}
+      - name: Install (dbt in its own venv, like the Airflow image)
         run: |
           python -m venv "$RUNNER_TEMP/dbt-venv"
           "$RUNNER_TEMP/dbt-venv/bin/pip" install -q -r requirements/dbt.txt
           pip install -q -r requirements/airflow.txt -c "$AIRFLOW_CONSTRAINTS"
           echo "DBT_BIN=$RUNNER_TEMP/dbt-venv/bin/dbt" >> "$GITHUB_ENV"
           echo "DBT_EXECUTABLE=$RUNNER_TEMP/dbt-venv/bin/dbt" >> "$GITHUB_ENV"
-
-      - name: Build deploy tree (re-parses only projects changed vs what's deployed)
-        run: python ci/build.py --out build/deploy --previous origin/deploy
-
-      - name: Test deploy tree (DAG import, selector parity, partial parse)
-        env:
-          DEPLOY_DIR: build/deploy
-          AIRFLOW_HOME: ${{ runner.temp }}/airflow
-        run: pytest
-
-      - name: Diff against current deploy
+      - name: Previous bundle = current deploy branch (for reuse)
         run: |
-          git fetch -q origin deploy || exit 0
-          export GIT_INDEX_FILE=$(mktemp); rm -f "$GIT_INDEX_FILE"
-          git --work-tree=build/deploy add -A -f .
-          {
-            echo "### Deploy diff vs \`origin/deploy\`"
-            echo '```'
-            git diff --cached --stat origin/deploy -- . ':!**/manifest.json' ':!**/partial_parse.msgpack' | tail -40
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
+          mkdir -p build/previous
+          if git fetch -q --depth 1 origin deploy; then git archive FETCH_HEAD | tar -x -C build/previous; fi
+      - name: Generate bundle
+        run: python -m manifest.generate --source "$DBT_SOURCE" --out build/bundle --previous build/previous
+      - name: Validate bundle
+        env: {BUNDLE_DIR: build/bundle, AIRFLOW_HOME: "${{ runner.temp }}/airflow"}
+        run: pytest
       - uses: actions/upload-artifact@v4
-        with:
-          name: deploy-tree
-          path: build/deploy
-          include-hidden-files: true
-          retention-days: 7
+        with: {name: bundle, path: build/bundle, include-hidden-files: true, retention-days: 7}

@@ -1,0 +1,8 @@
+description: a new upstream model; the ancestors selector (+warehouse_summary) picks it up
+rebuilt_projects: [operations]
+dags:
+  dbt_operations_warehouse:
+    tasks_added: [warehouse_capacity]
+    upstream:
+      warehouse_capacity: [fct_warehouse_daily]
+      warehouse_summary: [warehouse_capacity]

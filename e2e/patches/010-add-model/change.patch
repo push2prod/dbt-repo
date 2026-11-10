@@ -1,0 +1,9 @@
+diff --git a/projects/core/models/accounts/accounts_churn.sql b/projects/core/models/accounts/accounts_churn.sql
+new file mode 100644
+index 0000000..6806c1d
+--- /dev/null
++++ b/projects/core/models/accounts/accounts_churn.sql
+@@ -0,0 +1,3 @@
++{{ config(tags=['accounts']) }}
++select entity_id, events < 2 as churn_risk
++from {{ ref('dim_accounts_entity') }}

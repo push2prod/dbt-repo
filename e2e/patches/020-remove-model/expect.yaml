@@ -1,0 +1,5 @@
+description: a deleted model's task disappears
+rebuilt_projects: [finance]
+dags:
+  dbt_finance_billing:
+    tasks_removed: [billing_summary]

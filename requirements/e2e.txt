@@ -1,0 +1,7 @@
+# e2e test driver (runs on the CI runner, talks to Docker / k3s / Airflow's REST API).
+testcontainers[k3s,postgres]==4.15.0
+kubernetes==37.0.2
+requests==2.34.2
+pyyaml>=6
+pytest>=8
+psycopg2-binary>=2.9

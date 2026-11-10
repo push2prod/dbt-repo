@@ -1,0 +1,40 @@
+# E2E stress test on a fresh Airflow (testcontainers K3s + official Helm chart).
+# Manual, and on every push to master. GitLab equivalent: the `e2e` job.
+name: e2e
+
+on:
+  push:
+    branches: [master, ccr-af39a5a0-37husb]   # TEMP: dev-branch trigger for iterating; remove before merge
+  workflow_dispatch:
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest     # 4 vCPU / 16 GB; Docker with privileged containers
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "${{ env.PYTHON_VERSION }}", cache: pip, cache-dependency-path: requirements/*.txt}
+      - name: Install (dbt venv + test driver)
+        run: |
+          python -m venv "$RUNNER_TEMP/dbt-venv"
+          "$RUNNER_TEMP/dbt-venv/bin/pip" install -q -r requirements/dbt.txt
+          pip install -q -r requirements/e2e.txt
+          echo "DBT_BIN=$RUNNER_TEMP/dbt-venv/bin/dbt" >> "$GITHUB_ENV"
+      - name: E2E stress test
+        env: {E2E_REPORT: build/e2e/report.json}
+        run: pytest e2e -v -s -p no:cacheprovider
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: {name: e2e-report, path: build/e2e, retention-days: 14}

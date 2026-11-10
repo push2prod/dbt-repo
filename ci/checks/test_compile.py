@@ -1,0 +1,54 @@
+"""Every model's SQL must render: `dbt compile` without a warehouse.
+
+`dbt parse` (what produces the manifest) is lenient. It accepts SQL that
+fails as soon as a task renders it, e.g. a package macro called without its
+package prefix (`cents_to_dollars(...)` instead of
+`shared_macros.cents_to_dollars(...)`). The strain test found exactly that,
+with every DAG parsing fine and every task failing.
+
+`--no-introspect --no-populate-cache` keeps dbt off the warehouse, so this
+runs in CI with the same dummy-secret parse env. Models that need
+introspective queries (run_query, adapter.get_columns_in_relation, ...) can't
+be checked this way.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+from conftest import PROJECTS
+
+
+@pytest.mark.parametrize("project", PROJECTS)
+def test_all_models_compile(
+    bundle_dir: Path, parse_env: dict[str, str], dbt_bin: str, tmp_path: Path, project: str
+) -> None:
+    work = tmp_path / "deploy"
+    shutil.copytree(bundle_dir, work, symlinks=False)
+    project_dir = work / "projects" / project
+    r = subprocess.run(
+        [
+            dbt_bin,
+            "compile",
+            "--no-introspect",
+            "--no-populate-cache",
+            "--project-dir",
+            str(project_dir),
+            "--profiles-dir",
+            str(project_dir),
+            "--profile",
+            project,
+            "--target",
+            "prod",
+            "--no-use-colors",
+        ],
+        env={**os.environ, **parse_env},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert r.returncode == 0, f"dbt compile failed for {project}:\n{r.stdout[-3000:]}{r.stderr[-1000:]}"
