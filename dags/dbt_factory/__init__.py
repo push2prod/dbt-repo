@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import functools
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +39,11 @@ DEFAULTS: dict[str, Any] = {
     "catchup": False,
     "max_active_runs": 1,
     "tags": ["dbt"],
+    # One retry covers the KubernetesExecutor parse/run skew: a pod that starts
+    # just after a deploy clones the new revision. A retry re-parses and runs
+    # on that revision. dbt materializations are rebuilt whole, so a retry is safe.
+    "retries": 1,
+    "retry_delay_seconds": 60,
 }
 
 
@@ -77,6 +82,7 @@ def build_dags(project: str, namespace: dict[str, Any]) -> None:
             catchup=spec["catchup"],
             max_active_runs=spec["max_active_runs"],
             tags=[*spec["tags"], f"dbt:{project}"],
+            default_args={"retries": spec["retries"], "retry_delay": timedelta(seconds=spec["retry_delay_seconds"])},
             project_config=project_config,
             profile_config=profile_config,
             execution_config=ExecutionConfig(

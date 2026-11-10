@@ -245,30 +245,35 @@ commit, a one-commit revert, and a 1:1 audit trail.
 The tests above load the DAG files in-process. `strain/run.py` checks the
 whole path on a real Airflow instead:
 
-* **Setup:** Postgres (metadata + "warehouse"), Airflow 2.10.5 + Cosmos 1.15.1,
-  LocalExecutor, standalone DAG processor, the `[scheduler]` settings from
+* **Setup:** Postgres (metadata + "warehouse"), Airflow 2.10.5 + Cosmos
+  1.15.1, standalone DAG processor, the `[scheduler]` settings from
   `deploy/airflow/values.yaml`, and dbt in its own venv.
 * **Deploy path:** `deploy` is published by `ci/deploy.sh` to a local
-  origin, and `strain/gitsync.sh` follows it with the same atomic
-  symlink-swap layout as git-sync.
+  origin. `strain/gitsync.sh` follows it for the scheduler and DAG processor,
+  with git-sync's atomic symlink-swap layout.
+* **Task execution:** `--executor-model k8s` (default) models the
+  KubernetesExecutor. Every task runs from its own fresh shallow clone of
+  `deploy`, like a pod with the chart's one-time git-sync init container
+  (`strain/k8s_pod/airflow`). `--executor-model local` runs tasks from the
+  scheduler's git-sync checkout, as Celery/Local executors do.
 * **Load:** 10 of the 20 DAGs are kept running back to back. Every model is
-  a real `dbt run` subprocess, up to 16 at once.
+  a real `dbt run`, up to 16 at once.
 * **The change:** while loaded, 5 DAGs change on master, five different ways:
   a model added, a model deleted, an exclude added in DAG config, a schedule
   changed, and a model added with a new dependency. Then it deploys.
 
-Result on a 4-core machine (run it yourself: ~5 minutes):
+Results on a 4-core machine (~5 minutes per run):
 
-| check | result |
-|---|---|
-| peak strain | 16 dbt tasks running, load average 18 on 4 cores |
-| 20 DAGs serialized, 0 import errors | every sample (~57 over the run) |
-| scheduler / DAG processor heartbeat age | max 6.0s / 4.9s (threshold 30s) |
-| parse time per DAG file under load (probe) | worst 2.3s; whole folder 2.8s |
-| 5 changes visible in the serialized DagBag | **10s after publish** (~40s after merge, incl. build) |
-| other 15 DAGs | structure unchanged |
-| all 20 DAGs re-parsed after deploy | yes, despite `min_file_process_interval=600` |
-| task failures, incl. tasks in flight during the swap | 0 (234 succeeded) |
+| check | k8s model, git-sync timeout 0 | local model, timeout 600s | local model, timeout 0 |
+|---|---|---|---|
+| peak strain (running tasks / load average) | 16 / 15 | 16 / 18 | 16 / ~18 |
+| 20 DAGs serialized, 0 import errors, every sample | yes | yes | yes |
+| max heartbeat age, scheduler / processor (limit 30s) | 5.8s / 4.9s | 6.0s / 4.9s | ok |
+| parse time per DAG file under load (probe) | worst 1.3s | worst 2.3s | ok |
+| 5 changes visible after publish | **9s** | 10s | 10s |
+| other 15 DAGs unchanged | yes | yes | yes |
+| all 20 re-parsed after deploy (interval 600s) | yes | yes | yes |
+| task failures | **0** (146 ok, 142 pods on 2 revisions) | 0 (234 ok) | **10 failed, 26 skipped** |
 
 ### What it found (and what's fixed)
 1. **Deploys don't wait for `min_file_process_interval`.** With
@@ -277,32 +282,38 @@ Result on a 4-core machine (run it yourself: ~5 minutes):
    writes every revision fresh, so a deploy is live within seconds even with
    a 600s interval. A long interval is therefore safe; it only stops pointless
    re-parsing between deploys.
-2. **git-sync must keep the old checkout for a while.** A task binds to the
-   revision it parsed, and Cosmos runs dbt from a temp dir of *symlinks*
-   into that revision. With git-sync's default `--stale-worktree-timeout=0`,
-   tasks in flight during a deploy fail with `FileNotFoundError`
-   (`strain/run.py --stale-worktree-timeout 0` reproduces it: 10 tasks failed
-   and 26 were skipped downstream in one deploy, versus 0 with a 600s timeout).
-   `values.yaml` sets `GITSYNC_STALE_WORKTREE_TIMEOUT=2h`; use more than your
-   longest task.
-3. **`dbt parse` doesn't validate SQL.** A package macro called without its
+2. **The KubernetesExecutor avoids the files-swapped-under-a-task problem.**
+   Cosmos runs dbt from a temp dir of *symlinks* into the checkout a task
+   started on. A long-lived git-sync sidecar (Celery/Local) deletes that
+   checkout right after the next swap by default, and in-flight tasks fail
+   (the last column). KubernetesExecutor pods clone once and never update,
+   so this can't happen, even with timeout 0. For Celery/Local you'd need
+   `GITSYNC_STALE_WORKTREE_TIMEOUT` above your longest task. git-sync has it
+   from v4.0.0; the Airflow chart 1.15 ships v4.1.0, and v3 doesn't have it.
+3. **Residual k8s race: parse/run skew.** A pod clones whatever `deploy` is
+   when it *starts*, which can be newer than what the scheduler parsed. A task
+   queued just before a deploy then runs the new SQL, which is usually what you
+   want. If the deploy *removed* that task, the pod won't find it and the task
+   fails. Not observed here (Airflow marked the removed tasks `removed` first),
+   but the window exists in principle. `retries: 1` covers it.
+4. **`dbt parse` doesn't validate SQL.** A package macro called without its
    prefix (`cents_to_dollars()` instead of `shared_macros.cents_to_dollars()`)
    parses fine, gives a valid manifest and valid DAGs, and fails every task.
    Hence `tests/test_compile.py`: `dbt compile --no-introspect
    --no-populate-cache` renders every model without a warehouse.
-4. **Cosmos 1.16 requires Airflow ≥ 2.11.** On 2.10 use Cosmos 1.15.x.
+5. **Cosmos 1.16 requires Airflow ≥ 2.11.** On 2.10 use Cosmos 1.15.x.
    Selector parity is re-checked by CI on whatever version is pinned.
-5. **Cosmos's partial-parse cache** (`[cosmos] cache_dir`, per DAG on local
-   disk) is chosen over the shipped msgpack by mtime. Fresh git-sync
-   checkouts make the shipped one win after each deploy. Don't turn the cache
-   off with `enable_cache`: in Cosmos 1.15, tasks then get *no* msgpack and
-   fully re-parse each time.
+6. **Every task pod clones `deploy`**: 480 KB packed / 6.6 MB checked out here,
+   0.2s locally. Keep `depth: 1` and keep the deploy tree to dags/, packages/
+   and projects/. Cosmos's partial-parse cache starts empty in each pod, so
+   every task uses the shipped, CI-verified msgpack.
 
 ## Operational settings (Airflow)
 See `deploy/airflow/values.yaml` (Airflow 2.10 keys): `min_file_process_interval: 600`
 with `file_parsing_sort_mode: modified_time`, `parsing_processes` ≤ cores − 1,
-standalone DAG processor with a CPU request and no CPU limit, git-sync on
-`deploy` with `subPath: dags` and `GITSYNC_STALE_WORKTREE_TIMEOUT`,
+KubernetesExecutor, standalone DAG processor with a CPU request and no CPU limit,
+git-sync on `deploy` with `subPath: dags`, `depth: 1` and a short
+`GITSYNC_STALE_WORKTREE_TIMEOUT` for the sidecar,
 `DBT_EXECUTABLE=/opt/dbt-venv/bin/dbt`.
 
 ## Running locally

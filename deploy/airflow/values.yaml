@@ -2,6 +2,8 @@
 # for this repo. Every [scheduler] value below is also what
 # strain/run_strain_test.sh runs with.
 
+executor: KubernetesExecutor
+
 images:
   airflow:
     # Image = Airflow 2.10.5 + astronomer-cosmos 1.15.1 (requirements/airflow.txt)
@@ -22,20 +24,24 @@ dags:
     depth: 1
     subPath: dags           # dags_folder = <repo>/dags; projects/ sits next to it
     period: 60s
-    # git-sync checks out each revision into its own directory and swaps a
-    # symlink atomically, so DAG code, projects/ and manifests always come
-    # from one deploy commit. Fresh checkout = fresh mtimes, which is what
-    # gets changed files re-parsed right away (see below).
+    # Two different git-syncs with the KubernetesExecutor:
+    # * scheduler / DAG processor: a *sidecar* that keeps following `deploy`.
+    #   It checks out each revision into its own directory and swaps a symlink
+    #   atomically. Fresh checkout = fresh mtimes, which gets changed files
+    #   re-parsed right away (see [scheduler] below).
+    # * task pods: an *init container* with GITSYNC_ONE_TIME=true
+    #   (chart files/pod-template-file.kubernetes-helm-yaml). One shallow clone
+    #   of `deploy` at pod start, never updated, so a running task's files
+    #   can't change or disappear under it. (With Celery/Local executors they
+    #   can: see strain/run.py --executor-model local.)
+    # Every task pod clones the deploy branch, so keep it shallow (depth: 1) and
+    # the deploy tree small. It holds only dags/, packages/ and projects/.
     env:
-      # Keep the previous checkout around for longer than your longest dbt
-      # task. A task binds to the revision it parsed, and Cosmos runs dbt from
-      # a temp dir of symlinks into that revision. With git-sync's default (0),
-      # the old checkout is deleted right after the swap and tasks in flight
-      # fail with FileNotFoundError. strain/run.py --stale-worktree-timeout 0
-      # reproduces it. Check the flag against your git-sync v4 version
-      # (--stale-worktree-timeout).
+      # Keeps the sidecar's previous checkout briefly for a DAG-file parse that
+      # is in flight during a swap. Tasks don't depend on it with this executor.
+      # Raise it above your longest task if you ever move to Celery.
       - name: GITSYNC_STALE_WORKTREE_TIMEOUT
-        value: "2h"
+        value: "10m"
   persistence:
     enabled: false
 
@@ -55,7 +61,7 @@ config:
     standalone_dag_processor: "True"   # parsing load can't starve the scheduler loop
   core:
     dagbag_import_timeout: 60
-    # Ceiling for concurrently running dbt tasks. Each one is a dbt subprocess.
+    # Ceiling for concurrently running task pods (each = one dbt invocation).
     parallelism: 32
 
 dagProcessor:
@@ -70,6 +76,9 @@ dagProcessor:
       memory: 4Gi
 
 workers:
+  # With the KubernetesExecutor this is the task *pod* spec: one pod per Cosmos
+  # task, i.e. one dbt invocation. Cosmos' partial-parse cache lives in the
+  # pod and starts empty, so each task uses the shipped, CI-verified msgpack.
   resources:
     # dbt tasks are the CPU-heavy part. Size here, not on the processor.
     requests:

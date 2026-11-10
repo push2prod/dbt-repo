@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Stand-in for a KubernetesExecutor task pod, put first on the scheduler's PATH.
+#
+# The official chart's pod template gives task pods git-sync only as an
+# *init* container with GITSYNC_ONE_TIME=true: one shallow clone of the
+# deploy branch at pod start, never updated afterwards. This wrapper does the
+# same for every `airflow tasks run`: fresh clone -> run the task from it ->
+# throw the "pod" away.
+#
+# Env: REAL_AIRFLOW, POD_ORIGIN (git URL), POD_ROOT (scratch dir), POD_LOG
+if [[ "${1:-}" == tasks && "${2:-}" == run && " $* " != *" --raw "* ]]; then
+  pod=$(mktemp -d "$POD_ROOT/pod.XXXXXX")
+  git clone -q --depth 1 --branch deploy "$POD_ORIGIN" "$pod/repo" 2>/dev/null
+  rev=$(git -C "$pod/repo" rev-parse --short=12 HEAD)
+  export AIRFLOW__CORE__DAGS_FOLDER="$pod/repo/dags"
+  "$REAL_AIRFLOW" "$@"; rc=$?
+  echo "$(date -u +%FT%TZ) rev=$rev rc=$rc dag=$3 task=$4" >> "$POD_LOG"
+  rm -rf "$pod"
+  exit $rc
+fi
+exec "$REAL_AIRFLOW" "$@"

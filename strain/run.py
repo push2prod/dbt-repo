@@ -9,9 +9,12 @@ What it builds (all local, nothing external):
   Postgres         metadata DB + the "warehouse" dbt writes to
   origin.git       stand-in for GitHub: master + deploy
   git-sync         strain/gitsync.sh, tracking `deploy` (atomic symlink swap)
-  Airflow 2.10     LocalExecutor scheduler + standalone DAG processor, with the
-                   [scheduler] settings from deploy/airflow/values.yaml
+  Airflow 2.10     scheduler + standalone DAG processor, with the [scheduler]
+                   settings from deploy/airflow/values.yaml
                    (min_file_process_interval=600, parsing_processes=3)
+  task execution   --executor-model k8s (default): each task in its own fresh
+                   clone of deploy, like a KubernetesExecutor pod with a one-time
+                   git-sync init container. local: tasks share the git-sync checkout.
 
 Phases:
   1. deploy v1 via ci/deploy.sh -> all 20 DAGs parsed, 0 import errors
@@ -109,9 +112,10 @@ class Env:
         os.environ.update(self.vars)
         os.environ["PATH"] = f"{Path(sys.executable).parent}:{os.environ['PATH']}"
 
-    def spawn(self, name: str, cmd: list[str], cwd: Path | None = None) -> subprocess.Popen:
+    def spawn(self, name: str, cmd: list[str], cwd: Path | None = None, extra_env: dict | None = None) -> subprocess.Popen:
         out = open(self.work / "logs" / f"{name}.log", "w")
-        p = subprocess.Popen(cmd, cwd=cwd, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
+        p = subprocess.Popen(cmd, cwd=cwd, stdout=out, stderr=subprocess.STDOUT, start_new_session=True,
+                             env={**os.environ, **(extra_env or {})})
         self.procs.append(p)
         return p
 
@@ -324,6 +328,7 @@ def failure_reasons(log_root: Path) -> dict[str, int]:
     """Group failed task attempts by the first recognisable cause in their log."""
     patterns = {
         "old revision deleted under a running task": "No such file or directory",
+        "task missing from the pod's revision (parse/run skew)": "TaskNotFound",
         "macro undefined": "is undefined",
         "relation missing": "does not exist",
         "database error": "Database Error",
@@ -348,6 +353,10 @@ def main() -> int:
     ap.add_argument("--warmup", type=int, default=90, help="seconds of load before the change")
     ap.add_argument("--hold", type=int, default=90, help="seconds of load after the change is visible")
     ap.add_argument("--change-timeout", type=int, default=300)
+    ap.add_argument("--executor-model", choices=["k8s", "local"], default="k8s",
+                    help="k8s: every task runs from its own fresh clone of deploy, like a KubernetesExecutor "
+                         "pod with a one-time git-sync init container (strain/k8s_pod/airflow). "
+                         "local: tasks run from the scheduler's git-sync checkout (Celery/Local executor)")
     ap.add_argument("--stale-worktree-timeout", type=int, default=600,
                     help="seconds git-sync keeps the previous checkout. git-sync's default is 0, "
                          "which fails tasks still running from the old revision (try --stale-worktree-timeout 0)")
@@ -386,7 +395,18 @@ def main() -> int:
         seed_warehouse(env)
         log("airflow db migrate")
         sh(["airflow", "db", "migrate"])
-        env.spawn("scheduler", ["airflow", "scheduler"])
+        sched_env = {}
+        if args.executor_model == "k8s":
+            (work / "pods").mkdir()
+            sched_env = {
+                "AIRFLOW__CORE__EXECUTE_TASKS_NEW_PYTHON_INTERPRETER": "True",
+                "PATH": f"{REPO / 'strain/k8s_pod'}:{os.environ['PATH']}",
+                "REAL_AIRFLOW": shutil.which("airflow"),
+                "POD_ORIGIN": f"file://{work / 'origin.git'}",
+                "POD_ROOT": str(work / "pods"),
+                "POD_LOG": str(work / "logs" / "pods.log"),
+            }
+        env.spawn("scheduler", ["airflow", "scheduler"], extra_env=sched_env)
         env.spawn("dag-processor", ["airflow", "dag-processor"])
 
         t0 = time.time()
@@ -492,6 +512,15 @@ def main() -> int:
         check("parse probe: every DAG file < 5s under load", worst is not None and worst < 5,
               f"worst file {worst:.2f}s, whole folder max {max(total):.2f}s" if worst else "no probe")
         report["peak"] = {"running_tasks": peak_running, "load1": peak_load, "cores": os.cpu_count()}
+        pod_log = work / "logs" / "pods.log"
+        if pod_log.exists():
+            pods = [dict(kv.split("=", 1) for kv in line.split()[1:]) for line in pod_log.read_text().splitlines()]
+            by_rev: dict[str, int] = {}
+            for pod in pods:
+                by_rev[pod["rev"]] = by_rev.get(pod["rev"], 0) + 1
+            report["pods"] = {"total": len(pods), "by_revision": by_rev,
+                              "nonzero_exit": sum(1 for pod in pods if pod["rc"] != "0")}
+            log(f"task pods: {len(pods)} across revisions {by_rev}, non-zero exits: {report['pods']['nonzero_exit']}")
         report["task_instances"] = final_ti
         report["dag_runs_triggered"] = started
     finally:
