@@ -1,0 +1,15 @@
+defaults:
+  tags: [dbt, operations]
+dags:
+  - dag_id: dbt_operations_shipping
+    schedule: "0 7 * * *"
+    select: ["tag:shipping"]
+  - dag_id: dbt_operations_support
+    schedule: "10 7 * * *"
+    select: ["tag:support"]
+  - dag_id: dbt_operations_warehouse
+    schedule: "20 7 * * *"
+    select: ["tag:warehouse"]
+  - dag_id: dbt_operations_procurement
+    schedule: "30 7 * * *"
+    select: ["tag:procurement"]

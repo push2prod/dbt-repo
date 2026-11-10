@@ -1,0 +1,8 @@
+{
+  "built_at_commit": "fb5bf79a351368143576e01e57f33ac4557f67c8",
+  "dbt_core": "1.11.17",
+  "local_packages": [
+    "packages/shared_macros"
+  ],
+  "project": "core"
+}
