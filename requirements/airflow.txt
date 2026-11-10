@@ -1,0 +1,6 @@
+# Airflow-side packages used by DAG validation in CI. Pin them to the same
+# versions as the Airflow image.
+apache-airflow==3.4.0
+astronomer-cosmos==1.16.0
+pyyaml>=6
+pytest>=8

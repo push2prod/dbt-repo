@@ -1,0 +1,9 @@
+defaults:
+  tags: [dbt, core]
+dags:
+  - dag_id: dbt_core_daily
+    schedule: "0 2 * * *"
+    select: ["tag:daily"]
+  - dag_id: dbt_core_hourly
+    schedule: "@hourly"
+    select: ["tag:hourly"]

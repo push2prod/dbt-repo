@@ -1,0 +1,10 @@
+defaults:
+  tags: [dbt, finance]
+dags:
+  - dag_id: dbt_finance_daily
+    schedule: "0 3 * * *"
+    select: ["tag:daily"]
+    exclude: ["tag:deprecated"]
+  - dag_id: dbt_finance_monthly
+    schedule: "0 4 1 * *"
+    select: ["+tag:monthly"]

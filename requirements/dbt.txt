@@ -1,0 +1,8 @@
+# Single source of truth for dbt versions.
+# CI parses with these, and the Airflow image / dbt runtime image installs
+# exactly these. partial_parse.msgpack and the manifest schema are tied to
+# the dbt-core version; a mismatch means a full re-parse (or a broken manifest).
+dbt-core==1.11.17
+dbt-postgres==1.11.0
+dbt-adapters==1.24.5
+dbt-common==1.39.0

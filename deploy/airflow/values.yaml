@@ -1,0 +1,53 @@
+# Apache Airflow Helm chart values: the parts that matter for this repo.
+# Airflow 3.x keys. On 2.x the [dag_processor] options live under [scheduler]
+# (and refresh_interval is called dag_dir_list_interval).
+
+dags:
+  gitSync:
+    enabled: true
+    repo: https://github.com/push2prod/dbt-repo.git
+    branch: deploy          # build output only, written by .github/workflows/deploy.yml
+    rev: HEAD
+    depth: 1
+    subPath: dags           # dags_folder = <repo>/dags; projects/ sits next to it
+    period: 60s
+    # git-sync checks out each revision into its own directory and swaps a
+    # symlink atomically. DAG code, projects/ and manifests therefore always
+    # come from the same deploy commit, never a half-updated mix.
+  persistence:
+    enabled: false
+
+# Alternative on Airflow 3: a versioned GitDagBundle instead of the sidecar.
+# Tasks then run against the exact bundle version their DAG run was parsed
+# from. dags/dbt_factory resolves every path relative to __file__, so both
+# setups work unchanged.
+#   config:
+#     dag_processor:
+#       dag_bundle_config_list: '[{"name":"dbt","classpath":"airflow.providers.git.bundles.git.GitDagBundle","kwargs":{"git_conn_id":"github_dbt_repo","tracking_ref":"deploy","subdir":"dags"}}]'
+
+config:
+  dag_processor:
+    # DAG structure only changes on deploy. Re-parsing every 30s is wasted
+    # CPU even when parsing is cheap.
+    min_file_process_interval: 600
+    refresh_interval: 120
+    # Keep at most cores - 1 so the processor's own heartbeat loop always has a core.
+    parsing_processes: 3
+    dag_file_processor_timeout: 120
+  core:
+    dagbag_import_timeout: 60
+  # Cosmos only reads manifest.json at parse time. orjson makes that faster
+  # for big manifests (needs `orjson` in the image).
+  cosmos:
+    enable_orjson_parser: "True"
+
+dagProcessor:
+  enabled: true
+  resources:
+    # Request real CPU and set no CPU limit: CFS throttling under a tight limit
+    # is what made the processor miss heartbeats. Memory limit is fine.
+    requests:
+      cpu: "4"
+      memory: 2Gi
+    limits:
+      memory: 4Gi

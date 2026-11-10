@@ -1,0 +1,90 @@
+# PR validation. Builds the exact deploy tree a merge would publish and tests it.
+#
+# merge_group: with a merge queue, GitHub tests the *queued result* (base +
+# every PR ahead of it). That makes squash, merge and rebase all safe: what
+# gets tested is what lands on master.
+name: ci
+
+on:
+  pull_request:
+    branches: [master]
+  merge_group:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"   # keep equal to the Airflow image's Python
+
+jobs:
+  commit-hygiene:
+    # GitHub skips *push* workflows when the head commit message contains a
+    # skip marker. Squash merges paste every PR commit message into the squash
+    # commit, so one "[skip ci]" in a WIP commit would silently skip the
+    # deploy. Rebase merges make the PR's last commit the head commit, with
+    # the same effect. Catch it here.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: No skip-ci markers in PR title or commits
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          pattern='\[(skip ci|ci skip|no ci|skip actions|actions skip)\]|skip-checks: *true'
+          bad=$( { echo "$TITLE"; git log --format=%B "$BASE..$HEAD"; } | grep -iE "$pattern" || true)
+          if [ -n "$bad" ]; then
+            echo "::error::skip-ci marker found; it would skip the deploy after merge:"; echo "$bad"; exit 1
+          fi
+
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need origin/deploy (reuse) and history (stale guard)
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements/*.txt
+
+      - name: Install pinned toolchain
+        run: pip install -r requirements/dbt.txt -r requirements/airflow.txt
+
+      - name: Build deploy tree
+        run: python ci/build.py --out build/deploy --previous origin/deploy
+
+      - name: Test deploy tree (DAG import, selector parity, partial parse)
+        env:
+          DEPLOY_DIR: build/deploy
+          AIRFLOW_HOME: ${{ runner.temp }}/airflow
+        run: pytest
+
+      - name: Diff against current deploy
+        run: |
+          git fetch -q origin deploy || exit 0
+          export GIT_INDEX_FILE=$(mktemp); rm -f "$GIT_INDEX_FILE"
+          git --work-tree=build/deploy add -A -f .
+          {
+            echo "### Deploy diff vs \`origin/deploy\`"
+            echo '```'
+            git diff --cached --stat origin/deploy -- . ':!**/manifest.json' ':!**/partial_parse.msgpack' | tail -40
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deploy-tree
+          path: build/deploy
+          include-hidden-files: true
+          retention-days: 7

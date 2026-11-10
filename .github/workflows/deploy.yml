@@ -1,0 +1,75 @@
+# Build the deploy tree from master and publish it to the `deploy` branch,
+# which git-sync (or an Airflow 3 GitDagBundle) tracks.
+#
+# Runs once per push to master, whatever the merge strategy:
+#   squash -> 1 new commit, rebase -> N new commits, merge -> merge commit + PR commits.
+# Only the pushed tip is built. Intermediate commits from a rebase merge are
+# never deployed, and nothing here depends on how many commits a push had,
+# because ci/build.py decides what to rebuild from content hashes, not from
+# `git diff HEAD~1` or `github.event.before`.
+name: deploy
+
+on:
+  push:
+    branches: [master]
+  # Reconcile: catches a deploy that was skipped (a skip-ci marker in a
+  # squash message, a failed run, a direct push). Cheap: unchanged projects
+  # are reused, and an unchanged tree publishes nothing.
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      full_rebuild:
+        description: "Rebuild every project, ignoring previous builds"
+        type: boolean
+        default: false
+
+# One deploy at a time. With cancel-in-progress: false, a running publish is
+# never killed halfway, and GitHub keeps only the *newest* pending run, so a
+# burst of merges collapses into: the current run, then the latest one.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # push: the pushed tip. schedule/dispatch: current master.
+          ref: ${{ github.event_name == 'push' && github.sha || 'master' }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements/*.txt
+
+      - name: Install pinned toolchain
+        run: pip install -r requirements/dbt.txt -r requirements/airflow.txt
+
+      - name: Build deploy tree
+        run: |
+          args="--out build/deploy --previous origin/deploy"
+          if [ "${{ inputs.full_rebuild }}" = "true" ]; then args="$args --no-reuse"; fi
+          python ci/build.py $args
+
+      - name: Test deploy tree
+        env:
+          DEPLOY_DIR: build/deploy
+          AIRFLOW_HOME: ${{ runner.temp }}/airflow
+        run: pytest
+
+      - name: Publish to deploy branch
+        env:
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: bash ci/publish.sh build/deploy "$(git rev-parse HEAD)" deploy

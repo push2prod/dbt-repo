@@ -1,0 +1,10 @@
+defaults:
+  tags: [dbt, marketing]
+dags:
+  - dag_id: dbt_marketing_daily
+    schedule: "0 5 * * *"
+    select: ["path:models/staging", "tag:daily"]
+  - dag_id: dbt_marketing_attribution
+    schedule: "@hourly"
+    select: ["path:models/marts/attribution+"]
+    exclude: ["last_touch"]
