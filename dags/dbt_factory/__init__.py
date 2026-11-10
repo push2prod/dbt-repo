@@ -33,6 +33,10 @@ DEPLOY_ROOT = DAGS_DIR.parent
 CONFIG_DIR = DAGS_DIR / "config"
 PROJECTS_DIR = DEPLOY_ROOT / "projects"
 DBT_EXECUTABLE = os.environ.get("DBT_EXECUTABLE", "/opt/dbt-venv/bin/dbt")
+# Benchmark switch only: COSMOS_LOAD_MODE=dbt_ls reproduces the old setup (no
+# manifest, Cosmos runs `dbt ls` while parsing) for the e2e comparison run.
+# Production always uses the CI-built manifest.
+LOAD_MODE = os.environ.get("COSMOS_LOAD_MODE", "dbt_manifest")
 
 DEFAULTS: dict[str, Any] = {
     "start_date": "2024-01-01",
@@ -61,11 +65,20 @@ def dag_specs(project: str) -> list[dict[str, Any]]:
     return [{**DEFAULTS, **cfg.get("defaults", {}), **spec} for spec in cfg["dags"]]
 
 
+def _load(project_dir: Path) -> tuple[Path | None, LoadMode, dict[str, Any]]:
+    """(manifest_path, load mode, extra RenderConfig args) for LOAD_MODE."""
+    if LOAD_MODE == "dbt_ls":
+        render = {"dbt_executable_path": DBT_EXECUTABLE, "invocation_mode": InvocationMode.SUBPROCESS}
+        return None, LoadMode.DBT_LS, render
+    return project_dir / "target" / "manifest.json", LoadMode.DBT_MANIFEST, {}
+
+
 def build_dags(project: str, namespace: dict[str, Any]) -> None:
     project_dir = PROJECTS_DIR / project
+    manifest_path, load_method, render_extra = _load(project_dir)
     project_config = ProjectConfig(
         dbt_project_path=project_dir,
-        manifest_path=project_dir / "target" / "manifest.json",
+        manifest_path=manifest_path,
         project_name=project,
         # dbt_packages/ ships in the deploy tree, built by CI with the pinned dbt.
         install_dbt_deps=False,
@@ -93,7 +106,8 @@ def build_dags(project: str, namespace: dict[str, Any]) -> None:
                 invocation_mode=InvocationMode.SUBPROCESS,
             ),
             render_config=RenderConfig(
-                load_method=LoadMode.DBT_MANIFEST,
+                load_method=load_method,
+                **render_extra,
                 select=spec.get("select", []),
                 exclude=spec.get("exclude", []),
             ),

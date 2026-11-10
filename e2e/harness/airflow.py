@@ -35,7 +35,7 @@ def chart_values(pg_ip: str) -> dict[str, Any]:
     prod = yaml.safe_load((s.REPO / "deploy/airflow/values.yaml").read_text())
     e2e = yaml.safe_load((s.REPO / "e2e/values-e2e.yaml").read_text())
     repo, tag = s.AIRFLOW_IMAGE.split(":")
-    runtime = {
+    runtime: dict[str, Any] = {
         "images": {"airflow": {"repository": repo, "tag": tag, "pullPolicy": "IfNotPresent"}},
         "data": {
             "metadataConnection": {
@@ -59,6 +59,10 @@ def chart_values(pg_ip: str) -> dict[str, Any]:
         ],
         "config": {"core": {"parallelism": str(s.PARALLELISM)}},
     }
+    if s.LOAD_MODE != "manifest":  # comparison: Cosmos runs `dbt ls` while parsing
+        runtime["env"].append({"name": "COSMOS_LOAD_MODE", "value": "dbt_ls"})
+        cache = "False" if s.LOAD_MODE == "dbt_ls_nocache" else "True"
+        runtime["config"]["cosmos"] = {"enable_cache_dbt_ls": cache}
     return deep_merge(deep_merge(prod, e2e), runtime)
 
 

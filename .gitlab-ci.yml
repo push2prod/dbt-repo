@@ -80,7 +80,7 @@ deploy:
     - cp -a ../bundle/. .
     - git add -A -f
     - if git diff --cached --quiet; then echo "bundle unchanged; nothing to deploy"; exit 0; fi
-    - git -c user.name="gitlab-ci" -c user.email="gitlab-ci@${CI_SERVER_HOST}" commit -q -m "deploy: ${CI_COMMIT_SHORT_SHA} [skip ci]" -m "Source-Commit: ${CI_COMMIT_SHA}"
+    - 'git -c user.name="gitlab-ci" -c user.email="gitlab-ci@${CI_SERVER_HOST}" commit -q -m "deploy: ${CI_COMMIT_SHORT_SHA} [skip ci]" -m "Source-Commit: ${CI_COMMIT_SHA}"'
     - git push origin deploy
 
 e2e:
@@ -109,3 +109,27 @@ e2e:
     when: always
     paths: [build/e2e]
     expire_in: 2 weeks
+
+# Comparison with the old setup (no manifests, Cosmos runs `dbt ls` while parsing).
+# Manual; each mode on its own job and cluster. Thresholds are recorded, not enforced.
+e2e-compare:
+  extends: e2e
+  rules:
+    - when: manual
+      allow_failure: true
+  parallel:
+    matrix:
+      - E2E_LOAD_MODE: [manifest, dbt_ls, dbt_ls_nocache]
+  variables:
+    E2E_REPORT: build/e2e/$E2E_LOAD_MODE/report.json
+
+e2e-compare-table:
+  stage: e2e
+  needs: [e2e-compare]
+  rules:
+    - when: manual
+      allow_failure: true
+  script:
+    - python -m e2e.compare build/e2e/*/report.json | tee build/e2e/comparison.md
+  artifacts:
+    paths: [build/e2e/comparison.md]

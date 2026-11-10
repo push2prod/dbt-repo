@@ -144,6 +144,38 @@ Why changes show up fast despite `min_file_process_interval: 600`: with
 any file whose mtime is newer than its last parse. git-sync writes every
 revision fresh.
 
+## Comparison: CI manifests vs. Cosmos running `dbt ls`
+
+`E2E_LOAD_MODE` runs the same stress test against the old setup:
+
+| mode | bundle | Cosmos at parse time |
+|---|---|---|
+| `manifest` (default) | manifests + partial parse | reads `manifest.json` |
+| `dbt_ls` | no `target/` | runs `dbt ls` per DAG, Cosmos' dbt-ls cache **on** (its default) |
+| `dbt_ls_nocache` | no `target/` | runs `dbt ls` per DAG on every parse (`[cosmos] enable_cache_dbt_ls = False`) |
+
+The DAG factory switches with `COSMOS_LOAD_MODE=dbt_ls`, which is for this benchmark only.
+Everything else is identical: the chart values, parsing settings, load and patches.
+
+The comparison modes are expected to degrade the stack: DAG import timeouts,
+missed heartbeats, the DAG processor restarted by its liveness probe, a slow
+API. So they are built to keep measuring through that:
+
+* each mode runs on its own runner and cluster (`fail-fast: false`);
+* every wait has a deadline, and every API call and in-pod probe has a timeout;
+  failures are recorded as data (`api_failures`, `parse_probe_failures`,
+  `restarts`);
+* checks are recorded but only enforced in `manifest` mode (`E2E_ENFORCE`).
+
+GitHub: run the e2e workflow manually with **compare_cosmos_dbt_ls**. The
+`compare` job writes a side-by-side table (`python -m e2e.compare`) to the run
+summary. GitLab: the manual `e2e-compare` + `e2e-compare-table` jobs.
+
+Idle, local (no load), one full parse of the 5 DAG files: manifest 1.3s;
+`dbt ls` cold 70s (about 14s per file, 4 `dbt ls` runs each); `dbt ls` with a
+warm Cosmos cache 0.7s. The cache hides the cost until project files change,
+which is every deploy, under load.
+
 ## git-sync settings that matter
 
 * `dags.gitSync.ref: deploy`. git-sync v4 (chart ≥ 1.11) reads `ref`, and the

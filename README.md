@@ -78,6 +78,11 @@ What it does:
 5. Applies `e2e/patches/*`, regenerates, syncs.
 6. Checks every `expect.yaml`, heartbeats, parse times, import errors and task failures.
 
+**Compare with the old setup** (Cosmos running `dbt ls`, no manifests):
+`E2E_LOAD_MODE=dbt_ls` or `dbt_ls_nocache`, or on GitHub run the e2e workflow with
+*compare_cosmos_dbt_ls*. That runs all three modes in parallel and puts a table in the run summary
+(details in docs/ci-cd.md).
+
 The report goes to `build/e2e-report.json` (`E2E_REPORT` to change), plus
 `build/e2e-diag/` with pod logs on failure. Behind a TLS-inspecting proxy or
 Docker Hub limits, set `E2E_EXTRA_CA_FILE` / `E2E_REGISTRY_MIRROR`.
