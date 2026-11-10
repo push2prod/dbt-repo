@@ -98,7 +98,8 @@ def status_line(smp: Sample, triggered: int) -> str:
         return "Airflow API did not answer"
     hb = smp.heartbeat
     return (
-        f"{smp.dags} DAGs, {smp.active_runs} active runs, {smp.running_tasks} running tasks, "
+        f"{smp.dags} DAGs, {smp.active_runs} active runs, tasks {smp.running_tasks} running / "
+        f"{smp.queued_tasks} queued / {smp.succeeded_tasks} succeeded, "
         f"heartbeat scheduler {hb.get('scheduler', float('inf')):.0f}s / processor "
         f"{hb.get('dag_processor', float('inf')):.0f}s, import errors {smp.import_errors}, "
         f"restarts {sum(smp.restarts.values())}, runs triggered {triggered}"
@@ -124,6 +125,8 @@ class Sample:
     heartbeat: dict[str, float] = field(default_factory=dict)
     active_runs: int = 0
     running_tasks: int = 0
+    queued_tasks: int = 0  # KubernetesExecutor: a task is `queued` while its pod starts
+    succeeded_tasks: int = 0
     last_parsed: dict[str, float] = field(default_factory=dict)
     restarts: dict[str, int] = field(default_factory=dict)
 
@@ -166,6 +169,8 @@ class Load:
             smp.heartbeat = self.airflow.heartbeat_ages()
             smp.active_runs = len(self.airflow.active_run_dags())
             smp.running_tasks = self.airflow.task_count(["running"])
+            smp.queued_tasks = self.airflow.task_count(["queued", "scheduled"])
+            smp.succeeded_tasks = self.airflow.task_count(["success"])
         except (requests.RequestException, KeyError, ValueError):
             smp.api_ok = False
         self.samples.append(smp)
@@ -213,6 +218,8 @@ class Load:
             "api_failures": len(self.samples) - len(ok),
             "peak_active_dag_runs": max((x.active_runs for x in ok), default=0),
             "peak_running_tasks": max((x.running_tasks for x in ok), default=0),
+            "peak_running_or_queued_tasks": max((x.running_tasks + x.queued_tasks for x in ok), default=0),
+            "tasks_succeeded": ok[-1].succeeded_tasks if ok else 0,
             "max_scheduler_heartbeat_age": peak("scheduler"),
             "max_dag_processor_heartbeat_age": peak("dag_processor"),
             "max_import_errors": max((x.import_errors for x in ok), default=None),

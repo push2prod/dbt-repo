@@ -130,7 +130,7 @@ next pipeline rebuilds from the new state.
   5. Hold the load.
 * **Pass criteria** (`e2e/harness/settings.py`):
   * every patch expectation visible in Airflow ≤ 60s after the sync;
-  * per-file parse time in the DAG processor pod under load ≤ 5s;
+  * per-file parse time in the DAG processor pod under load ≤ 8s (steady state ~2–2.5s on a 2-vCPU runner);
   * scheduler and DAG processor heartbeats < 30s at every sample;
   * 20 DAGs and 0 import errors at every sample;
   * all 20 DAGs running at once;

@@ -46,7 +46,10 @@ TASK_PODS_PER_CPU = 3
 WARMUP_SECONDS = int(os.environ.get("E2E_WARMUP_SECONDS", "120"))
 HOLD_SECONDS = int(os.environ.get("E2E_HOLD_SECONDS", "120"))
 VISIBLE_WITHIN_SECONDS = 60  # every patch visible in Airflow after the sync
-PARSE_FILE_MAX_SECONDS = 5.0  # per DAG file, measured in the DAG processor pod under load
+# Per DAG file, measured in the DAG processor pod under load. Steady state on a
+# 2-vCPU runner is ~2-2.5s; right after a sync it briefly spikes (~5s) while the
+# processor re-parses every file and the runner also generated the bundle.
+PARSE_FILE_MAX_SECONDS = 8.0
 HEARTBEAT_MAX_AGE_SECONDS = 30  # scheduler + DAG processor
 EXPECTED_DAGS = 20
 

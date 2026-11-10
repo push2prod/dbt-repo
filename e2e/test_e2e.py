@@ -70,6 +70,7 @@ def test_baseline_dags_parse(stack: Stack) -> None:
     stack.generate(FIXTURES, bundle)
     stack.syncer.sync(bundle)
     assert stack.cluster.api is not None
+    t_install = time.time()
     install_chart(stack.cluster.api, stack.cluster.pg_ip())
     stack.airflow.wait_until_up(stack.cluster.api)
 
@@ -84,7 +85,12 @@ def test_baseline_dags_parse(stack: Stack) -> None:
         BASELINE_TIMEOUT,
         progress=progress,
     )
-    stack.report["baseline_parse_seconds"] = round(waited, 1) if waited is not None else None
+    # From chart install to the last DAG's first parse (Airflow's timestamps): the
+    # DAGs are often all parsed before the API answers, so the wait alone says little.
+    parsed = [iso_ts(d.get("last_parsed_time")) for d in stack.airflow.dags()]
+    stamps = [ts for ts in parsed if ts is not None]
+    stack.report["baseline_parse_seconds"] = round(max(stamps) - t_install, 1) if stamps else None
+    log(f"all DAGs first parsed {stack.report['baseline_parse_seconds']}s after the chart install (waited {waited})")
     check = stack.checks
     check(f"baseline: {s.EXPECTED_DAGS} DAGs parsed", waited is not None, f"{len(stack.airflow.dags())} DAGs")
     errors = stack.airflow.import_errors()
