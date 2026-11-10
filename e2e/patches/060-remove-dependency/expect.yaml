@@ -1,0 +1,7 @@
+description: a removed ref drops the edge; with the ancestors selector (+orders_summary) the former parent leaves the DAG
+rebuilt_projects: [core]
+dags:
+  dbt_core_orders:
+    tasks_removed: [fct_orders_daily]
+    upstream_removed:
+      orders_summary: [fct_orders_daily]

@@ -20,6 +20,7 @@ from kubernetes import client
 
 from e2e.harness import settings as s
 from e2e.harness.gitserver import IN_CLUSTER_URL
+from e2e.harness.log import log
 from e2e.harness.patches import DagShape, DagShapes
 
 
@@ -59,14 +60,11 @@ def chart_values(pg_ip: str) -> dict[str, Any]:
         ],
         "config": {"core": {"parallelism": str(s.PARALLELISM)}},
     }
-    if s.LOAD_MODE != "manifest":  # comparison: Cosmos runs `dbt ls` while parsing
-        runtime["env"].append({"name": "COSMOS_LOAD_MODE", "value": "dbt_ls"})
-        cache = "False" if s.LOAD_MODE == "dbt_ls_nocache" else "True"
-        runtime["config"]["cosmos"] = {"enable_cache_dbt_ls": cache}
     return deep_merge(deep_merge(prod, e2e), runtime)
 
 
 def install_chart(api: client.ApiClient, pg_ip: str) -> None:
+    log(f"installing the Airflow Helm chart via the K3s Helm controller ({s.CHART_URL.rsplit('/', 1)[-1]})")
     chart = requests.get(s.CHART_URL, timeout=120)
     chart.raise_for_status()
     body = {
@@ -89,6 +87,21 @@ def create_namespace(api: client.ApiClient) -> None:
     client.CoreV1Api(api).create_namespace(client.V1Namespace(metadata=client.V1ObjectMeta(name=s.NAMESPACE)))
 
 
+def pod_summary(api: client.ApiClient) -> str:
+    """'scheduler Running 1/1, dag-processor Pending 0/2, ...' for the Airflow control plane."""
+    parts = []
+    for pod in client.CoreV1Api(api).list_namespaced_pod(s.NAMESPACE).items:
+        labels = (pod.metadata.labels if pod.metadata else None) or {}
+        comp = labels.get("component")
+        if comp is None or comp == "worker" or (labels.get("kubernetes_executor") == "True"):
+            continue
+        statuses = (pod.status.container_statuses if pod.status else None) or []
+        ready = sum(bool(c.ready) for c in statuses)
+        phase = pod.status.phase if pod.status else "?"
+        parts.append(f"{comp} {phase} {ready}/{len(statuses)}")
+    return ", ".join(sorted(parts)) or "no Airflow pods yet"
+
+
 def iso_ts(value: str | None) -> float | None:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp() if value else None
 
@@ -107,16 +120,21 @@ class AirflowAPI:
         body: dict[str, Any] = r.json()
         return body
 
-    def wait_until_up(self, timeout: int = 900) -> None:
-        deadline = time.time() + timeout
-        while time.time() < deadline:
+    def wait_until_up(self, api: client.ApiClient, timeout: int = 900) -> None:
+        """Wait for the REST API, logging the control-plane pods every 30s while waiting."""
+        t0, next_log = time.time(), 0.0
+        while time.time() - t0 < timeout:
             try:
                 if self.http.get(f"{self.base}/health", timeout=5).ok and self._get("/dags", limit=1) is not None:
+                    log(f"Airflow API up after {time.time() - t0:.0f}s: {pod_summary(api)}")
                     return
             except requests.RequestException:
                 pass
+            if time.time() >= next_log:
+                log(f"waiting for Airflow ({time.time() - t0:.0f}s): {pod_summary(api)}")
+                next_log = time.time() + 30
             time.sleep(5)
-        raise TimeoutError(f"Airflow API not up after {timeout}s")
+        raise TimeoutError(f"Airflow API not up after {timeout}s: {pod_summary(api)}")
 
     def dags(self) -> list[dict[str, Any]]:
         dags: list[dict[str, Any]] = self._get("/dags", limit=100, only_active="true")["dags"]

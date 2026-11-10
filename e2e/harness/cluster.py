@@ -23,10 +23,7 @@ from testcontainers.community.postgres import PostgresContainer
 from testcontainers.core.network import Network
 
 from e2e.harness import settings as s
-
-
-def _log(msg: str) -> None:
-    print(f"[e2e] {msg}", flush=True)
+from e2e.harness.log import log
 
 
 def _tar_bytes(files: dict[str, bytes]) -> bytes:
@@ -63,8 +60,10 @@ class Cluster:
 
     def __enter__(self) -> Cluster:
         self.network.create()
+        log(f"starting Postgres ({s.POSTGRES_IMAGE})")
         self.pg.with_network(self.network).with_network_aliases(s.PG_ALIAS).start()
         self.pg.exec(["psql", "-U", s.PG_USER, "-d", "airflow", "-c", "create database analytics"])
+        log(f"Postgres up at {self.pg_ip()} (databases: airflow, analytics)")
         self.k3s = self._start_k3s()
         return self
 
@@ -94,11 +93,12 @@ class Cluster:
         k3s = K3SContainer(self._k3s_image(), enable_cgroup_mount=s.K3S_CGROUP_MOUNT)
         k3s.with_command(f"server --disable traefik --disable metrics-server --tls-san={k3s.get_container_host_ip()}")
         k3s.with_network(self.network).with_exposed_ports(s.WEBSERVER_NODEPORT, s.GIT_NODEPORT)
+        log(f"starting K3s ({s.K3S_IMAGE})")
         t = time.time()
         k3s.start()
         config.load_kube_config_from_dict(yaml.safe_load(k3s.config_yaml()))  # type: ignore[no-untyped-call]
         self.api = client.ApiClient()
-        _log(f"k3s up in {time.time() - t:.0f}s")
+        log(f"K3s up in {time.time() - t:.0f}s")
         return k3s
 
     def host_port(self, node_port: int) -> int:
@@ -112,13 +112,15 @@ class Cluster:
 
     # ------------------------------------------------------------------ images
     def build_airflow_image(self) -> None:
+        log(f"building {s.AIRFLOW_IMAGE} (Airflow 2.10.5 + cosmos + dbt venv + git) ...")
         t = time.time()
         self.docker.images.build(path=str(s.REPO), dockerfile="e2e/Dockerfile", tag=s.AIRFLOW_IMAGE, rm=True)
-        _log(f"built {s.AIRFLOW_IMAGE} in {time.time() - t:.0f}s")
+        log(f"built {s.AIRFLOW_IMAGE} in {time.time() - t:.0f}s")
 
     def load_image(self, tag: str) -> None:
         """docker save -> upload into the k3s container -> ctr import (so pods never pull it)."""
         assert self.k3s is not None
+        log(f"loading {tag} into K3s (docker save -> ctr import) ...")
         t = time.time()
         image_tar = self.workdir / "image.tar"
         with image_tar.open("wb") as fh:
@@ -134,7 +136,7 @@ class Cluster:
             raise RuntimeError(f"ctr import failed: {out.decode()[-2000:]}")
         image_tar.unlink()
         outer.unlink()
-        _log(f"loaded {tag} into k3s in {time.time() - t:.0f}s")
+        log(f"loaded {tag} into K3s in {time.time() - t:.0f}s")
 
     # ------------------------------------------------------------------ warehouse
     def pg_ip(self) -> str:
@@ -159,4 +161,4 @@ class Cluster:
             r = subprocess.run([*cmd, "--log-path", scratch], env=env, capture_output=True, text=True, check=False)
             if r.returncode:
                 raise RuntimeError(f"dbt seed failed for {d.name}:\n{r.stdout[-2000:]}")
-        _log("warehouse seeded")
+            log(f"seeded warehouse: {d.name}")

@@ -47,14 +47,12 @@ webserver:
     requests: {cpu: 200m, memory: 1Gi}
 
 # Small requests so a 4-CPU / 16 GB runner fits the control plane plus
-# E2E_PARALLELISM task pods. Production sizes are in deploy/airflow/values.yaml.
+# E2E_PARALLELISM task pods. The DAG processor keeps its production sizing
+# (deploy/airflow/values.yaml: 2 CPU requested, no CPU limit): that request is
+# what protects parsing from the dbt task pods, so the test must not weaken it.
 scheduler:
   resources:
     requests: {cpu: 200m, memory: 512Mi}
-dagProcessor:
-  resources:
-    requests: {cpu: 200m, memory: 512Mi}
-    limits: {memory: 2Gi}
 workers:
   resources:
     requests: {cpu: 50m, memory: 300Mi}

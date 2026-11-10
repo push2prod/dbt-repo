@@ -1,9 +1,18 @@
 # Patches
 
-Changes to the mock dbt content (`e2e/fixtures/`) that change the generated
-manifests. The e2e test applies **all of them at once** to a copy of `e2e/fixtures/` (`git apply`,
+Changes to the mock dbt projects (`e2e/fixtures/`) that change their structure,
+the model graph, and so the manifests and the DAGs Cosmos builds from them. The e2e test applies **all of them at once** to a copy of `e2e/fixtures/` (`git apply`,
 in directory order), regenerates the bundle, syncs it to Airflow under load,
 and checks every `expect.yaml`.
+
+| patch | project / DAG | structural change |
+|---|---|---|
+| 010-add-model | core / dbt_core_accounts | new leaf model → new task |
+| 020-remove-model | finance / dbt_finance_billing | model deleted → task gone |
+| 030-rename-model | marketing / dbt_marketing_content | model renamed → old task gone, new task |
+| 040-insert-model | product / dbt_product_search | model inserted mid-chain → new task, edge rewired |
+| 050-add-dependency | operations / dbt_operations_warehouse | new upstream model, picked up by the `+` selector |
+| 060-remove-dependency | core / dbt_core_orders | ref removed → edge gone, parent drops out of the `+` selector |
 
 Each patch is a directory:
 
@@ -25,6 +34,8 @@ dags:                             # per DAG; all keys optional
     schedule: "15 8 * * *"             # the DAG's new cron schedule
     upstream:                          # model -> models its task must depend on
       accounts_churn: [dim_accounts_entity]
+    upstream_removed:                  # model -> models its task must no longer depend on
+      fct_search_daily: [int_search_enriched]
 ```
 
 Models are matched against Cosmos task ids (`<model>_run` / `<model>.run`).

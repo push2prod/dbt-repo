@@ -1,0 +1,6 @@
+description: renaming a model replaces its task (old id gone, new id present)
+rebuilt_projects: [marketing]
+dags:
+  dbt_marketing_content:
+    tasks_added: [content_report]
+    tasks_removed: [content_summary]

@@ -1,9 +1,0 @@
-diff --git a/packages/shared_macros/macros/cents_to_dollars.sql b/packages/shared_macros/macros/cents_to_dollars.sql
-index ad2a1ef..759a067 100644
---- a/packages/shared_macros/macros/cents_to_dollars.sql
-+++ b/packages/shared_macros/macros/cents_to_dollars.sql
-@@ -1,3 +1,3 @@
--{% macro cents_to_dollars(column_name, precision=2) -%}
-+{% macro cents_to_dollars(column_name, precision=4) -%}
-     round(({{ column_name }} / 100.0)::numeric, {{ precision }})
- {%- endmacro %}

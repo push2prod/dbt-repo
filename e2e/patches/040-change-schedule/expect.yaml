@@ -1,4 +1,0 @@
-description: a schedule change in DAG config
-dags:
-  dbt_product_search:
-    schedule: "15 8 * * *"

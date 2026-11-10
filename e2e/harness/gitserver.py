@@ -15,6 +15,7 @@ from pathlib import Path
 from kubernetes import client
 
 from e2e.harness import settings as s
+from e2e.harness.log import log
 
 REPO_NAME = "airflow.git"
 IN_CLUSTER_URL = f"git://git-server.{s.NAMESPACE}.svc.cluster.local:9418/{REPO_NAME}"
@@ -27,6 +28,8 @@ _SERVE = (
 
 
 def deploy_git_server(api: client.ApiClient) -> None:
+    log("deploying the in-cluster git server (git daemon) ...")
+    t = time.time()
     core, apps = client.CoreV1Api(api), client.AppsV1Api(api)
     labels = {"app": "git-server"}
     container = client.V1Container(
@@ -57,6 +60,7 @@ def deploy_git_server(api: client.ApiClient) -> None:
     for _ in range(120):
         dep = apps.read_namespaced_deployment("git-server", s.NAMESPACE)
         if dep.status is not None and (dep.status.ready_replicas or 0) >= 1:
+            log(f"git server ready in {time.time() - t:.0f}s ({IN_CLUSTER_URL})")
             return
         time.sleep(2)
     raise TimeoutError(f"git-server did not become ready:\n{pod_report(core, 'app=git-server')}")
@@ -93,6 +97,8 @@ class Syncer:
         subprocess.run(cmd, cwd=self.clone, check=True, capture_output=True)
 
     def sync(self, bundle: Path) -> None:
+        """Commit ``bundle`` as the new tip of `deploy` and push it (what the deploy CI job does)."""
+        t = time.time()
         if not self.clone.exists():
             self.clone.mkdir(parents=True)
             self._git("init", "-q", "-b", "deploy")
@@ -107,6 +113,7 @@ class Syncer:
         for attempt in range(10):  # the NodePort can take a moment right after the pod is ready
             try:
                 self._git("push", "-q", "origin", "deploy")
+                log(f"synced {bundle.name} -> deploy (sync {self.count}) in {time.time() - t:.1f}s")
                 return
             except subprocess.CalledProcessError:
                 if attempt == 9:

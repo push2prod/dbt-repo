@@ -7,6 +7,7 @@ from pathlib import Path
 from kubernetes import client
 
 from e2e.harness import settings as s
+from e2e.harness.log import log
 
 
 def _pod_logs(core: client.CoreV1Api, pod: client.V1Pod, ns: str, dest: Path) -> str:
@@ -34,4 +35,4 @@ def dump(api: client.ApiClient, dest: Path) -> None:
             obj = e.involved_object
             lines.append(f"EVENT {e.type} {obj.kind}/{obj.name}: {e.reason} {e.message}")
     (dest / "pods-and-events.txt").write_text("\n".join(lines) + "\n")
-    print("[e2e] diagnostics:\n  " + "\n  ".join(lines[-80:]), flush=True)  # also in the CI log
+    log("diagnostics:\n  " + "\n  ".join(lines[-80:]))  # also in the CI log

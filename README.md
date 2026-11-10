@@ -12,7 +12,7 @@ Design and rationale: [docs/ci-cd.md](docs/ci-cd.md).
 |---|---|---|
 | 1. mock dbt projects | `e2e/fixtures/` | 5 projects (core, finance, marketing, product, operations), a shared macro package, 20 DAGs (each domain owned by one DAG, 5–7 models each) |
 | 2. manifest generation + CI | `manifest/`, `dags/dbt_factory/`, `ci/checks/`, `.github/workflows/`, `.gitlab-ci.yml` | `python -m manifest.generate` builds the deploy bundle (git-free, only changed projects re-parsed). CI validates it and commits it to the `deploy` branch |
-| 3. patches | `e2e/patches/` | `change.patch` + `expect.yaml` each: add / remove a model, exclude, schedule change, new dependency, shared-macro change |
+| 3. patches | `e2e/patches/` | `change.patch` + `expect.yaml` each, all structural: add / remove / rename a model, insert a model mid-chain, add / remove a dependency |
 | 4. e2e stress test | `e2e/` | testcontainers K3s + Postgres, official Helm chart, all DAGs running; applies the patches, regenerates, syncs, checks Airflow |
 
 ```
@@ -77,11 +77,6 @@ What it does:
 4. Keeps all DAGs running.
 5. Applies `e2e/patches/*`, regenerates, syncs.
 6. Checks every `expect.yaml`, heartbeats, parse times, import errors and task failures.
-
-**Compare with the old setup** (Cosmos running `dbt ls`, no manifests):
-`E2E_LOAD_MODE=dbt_ls` or `dbt_ls_nocache`, or on GitHub run the e2e workflow with
-*compare_cosmos_dbt_ls*. That runs all three modes in parallel and puts a table in the run summary
-(details in docs/ci-cd.md).
 
 The report goes to `build/e2e-report.json` (`E2E_REPORT` to change), plus
 `build/e2e-diag/` with pod logs on failure. Behind a TLS-inspecting proxy or

@@ -38,15 +38,6 @@ PG_USER = "airflow_dbt"
 PG_PASSWORD = "e2e-secret"  # runtime secret; the parse env uses a dummy on purpose
 PG_ALIAS = "warehouse"
 
-# What is compared. manifest = this repo's design (CI-built manifests, the default).
-# dbt_ls / dbt_ls_nocache = the old setup: no manifests in the bundle, Cosmos runs
-# `dbt ls` while parsing (with / without Cosmos' dbt-ls cache). In those modes the
-# pass criteria are recorded but not enforced: the run is there to measure.
-LOAD_MODE = os.environ.get("E2E_LOAD_MODE", "manifest")
-if LOAD_MODE not in ("manifest", "dbt_ls", "dbt_ls_nocache"):
-    raise ValueError(f"E2E_LOAD_MODE must be manifest, dbt_ls or dbt_ls_nocache, not {LOAD_MODE!r}")
-ENFORCE = os.environ.get("E2E_ENFORCE", "1" if LOAD_MODE == "manifest" else "0") == "1"
-
 # Stress-test shape and pass criteria.
 PARALLELISM = int(os.environ.get("E2E_PARALLELISM", "12"))  # concurrent task pods
 WARMUP_SECONDS = int(os.environ.get("E2E_WARMUP_SECONDS", "120"))

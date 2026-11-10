@@ -1,0 +1,19 @@
+diff --git a/projects/product/models/search/fct_search_daily.sql b/projects/product/models/search/fct_search_daily.sql
+index e90f960..1b76ef8 100644
+--- a/projects/product/models/search/fct_search_daily.sql
++++ b/projects/product/models/search/fct_search_daily.sql
+@@ -1,4 +1,4 @@
+ {{ config(tags=['search']) }}
+ select created_at as day, count(*) as events, sum(amount) as amount
+-from {{ ref('int_search_enriched') }}
++from {{ ref('int_search_sessionized') }}
+ group by 1
+diff --git a/projects/product/models/search/int_search_sessionized.sql b/projects/product/models/search/int_search_sessionized.sql
+new file mode 100644
+index 0000000..0e111f8
+--- /dev/null
++++ b/projects/product/models/search/int_search_sessionized.sql
+@@ -0,0 +1,3 @@
++{{ config(tags=['search']) }}
++select *, row_number() over (partition by entity_id order by created_at) as session_seq
++from {{ ref('int_search_enriched') }}

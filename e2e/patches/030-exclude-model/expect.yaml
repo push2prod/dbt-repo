@@ -1,4 +1,0 @@
-description: a DAG-config-only change (new exclude) removes a task; no project is re-parsed for it
-dags:
-  dbt_marketing_content:
-    tasks_removed: [content_summary]

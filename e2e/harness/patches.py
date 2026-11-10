@@ -86,10 +86,17 @@ def _check_dag(shape: DagShape, spec: dict[str, Any]) -> list[str]:
     if "schedule" in spec and shape["schedule"] != spec["schedule"]:
         problems.append(f"schedule is {shape['schedule']!r}, want {spec['schedule']!r}")
     for model, ups in (spec.get("upstream") or {}).items():
-        task = _run_task(shape, model)
-        have = {model_of(u) for u in shape["upstream"].get(task, [])} if task else set()
+        have = _upstream_models(shape, model)
         problems += [f"{model} does not depend on {u}" for u in ups if u not in have]
+    for model, ups in (spec.get("upstream_removed") or {}).items():
+        have = _upstream_models(shape, model)
+        problems += [f"{model} still depends on {u}" for u in ups if u in have]
     return problems
+
+
+def _upstream_models(shape: DagShape, model: str) -> set[str]:
+    task = _run_task(shape, model)
+    return {model_of(u) for u in shape["upstream"].get(task, [])} if task else set()
 
 
 def unmet(exp: Expectations, shapes: DagShapes) -> dict[str, list[str]]:

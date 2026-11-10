@@ -1,0 +1,10 @@
+description: a model inserted mid-chain becomes a task and rewires the edge around it
+rebuilt_projects: [product]
+dags:
+  dbt_product_search:
+    tasks_added: [int_search_sessionized]
+    upstream:
+      int_search_sessionized: [int_search_enriched]
+      fct_search_daily: [int_search_sessionized]
+    upstream_removed:
+      fct_search_daily: [int_search_enriched]

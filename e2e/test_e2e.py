@@ -1,7 +1,6 @@
 """E2E stress test: a fresh Airflow 2.10 on K3s (testcontainers), Cosmos DAGs from manifests.
 
-    DBT_BIN=/opt/dbt-venv/bin/dbt pytest e2e                         # ~15 min, needs Docker (privileged)
-    E2E_LOAD_MODE=dbt_ls DBT_BIN=... pytest e2e                       # comparison: Cosmos runs `dbt ls`
+    DBT_BIN=/opt/dbt-venv/bin/dbt pytest e2e -s       # ~15 min, needs Docker (privileged containers)
 
 1. Start Postgres + K3s, build and load the Airflow image, run git-sync against
    an in-cluster git server, install the official Helm chart (KubernetesExecutor).
@@ -11,9 +10,8 @@
    changed projects re-parsed), sync; every expect.yaml must show up in Airflow
    in time, with healthy heartbeats, fast parsing, no import errors, no failed tasks.
 
-Every check is recorded in the report. In ``manifest`` mode failed checks fail
-the test; in the ``dbt_ls*`` comparison modes they are only recorded (the stack
-is expected to struggle, and the point is to measure how much).
+Every check is recorded in the report and the log first, then enforced together,
+so one failure doesn't hide the others.
 """
 
 from __future__ import annotations
@@ -27,13 +25,14 @@ from dataclasses import asdict
 import pytest
 
 from e2e.harness import settings as s
-from e2e.harness.airflow import install_chart
+from e2e.harness.airflow import install_chart, iso_ts
 from e2e.harness.cluster import Cluster
 from e2e.harness.diag import dump
+from e2e.harness.log import log
 from e2e.harness.patches import FIXTURES, Expectations, apply_all, load_expectations, unmet
 from e2e.harness.stack import DBT_BIN, Stack, bring_up, parse_latency, wait_for
 
-BASELINE_TIMEOUT = 900  # the dbt_ls modes can take many minutes to parse everything
+BASELINE_TIMEOUT = 600
 PATCH_TIMEOUT = 600
 
 
@@ -43,7 +42,7 @@ def _write_report(st: Stack) -> None:
     s.REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
     s.REPORT_PATH.write_text(json.dumps(st.report, indent=2, default=str))
     brief = {k: v for k, v in st.report.items() if k != "samples"}
-    print(f"[e2e] report ({s.REPORT_PATH}):\n{json.dumps(brief, indent=2, default=str)}", flush=True)
+    log(f"report ({s.REPORT_PATH}):\n{json.dumps(brief, indent=2, default=str)}")
 
 
 @pytest.fixture(scope="module")
@@ -66,13 +65,24 @@ def stack(tmp_path_factory: pytest.TempPathFactory, request: pytest.FixtureReque
 
 
 def test_baseline_dags_parse(stack: Stack) -> None:
+    log("== baseline: generate the bundle for the unpatched projects, sync it, install Airflow")
     bundle = stack.workdir / "bundle-v1"
     stack.generate(FIXTURES, bundle)
     stack.syncer.sync(bundle)
     assert stack.cluster.api is not None
     install_chart(stack.cluster.api, stack.cluster.pg_ip())
-    stack.airflow.wait_until_up()
-    waited = wait_for(lambda: len(stack.airflow.dags()) >= s.EXPECTED_DAGS, BASELINE_TIMEOUT)
+    stack.airflow.wait_until_up(stack.cluster.api)
+
+    def progress() -> str:
+        errors = stack.airflow.import_errors()
+        return f"{len(stack.airflow.dags())}/{s.EXPECTED_DAGS} DAGs, {len(errors)} import errors"
+
+    waited = wait_for(
+        f"all {s.EXPECTED_DAGS} DAGs parsed",
+        lambda: len(stack.airflow.dags()) >= s.EXPECTED_DAGS,
+        BASELINE_TIMEOUT,
+        progress=progress,
+    )
     stack.report["baseline_parse_seconds"] = round(waited, 1) if waited is not None else None
     check = stack.checks
     check(f"baseline: {s.EXPECTED_DAGS} DAGs parsed", waited is not None, f"{len(stack.airflow.dags())} DAGs")
@@ -82,32 +92,55 @@ def test_baseline_dags_parse(stack: Stack) -> None:
 
 
 def test_patches_under_load(stack: Stack) -> None:
+    log("== stress: seed the warehouse, run every DAG, then deploy the patched projects under load")
     stack.cluster.seed_warehouse(stack.workdir / "bundle-v1" / "projects", DBT_BIN)
     stack.load.start()
-    stack.load.run_for(s.WARMUP_SECONDS)
+    stack.load.run_for(s.WARMUP_SECONDS, "warm-up")
 
     source = stack.workdir / "fixtures-patched"
     shutil.copytree(FIXTURES, source)
     stack.report["patches"] = apply_all(source)
+    log(f"applied patches: {', '.join(stack.report['patches'])}")
     exp = load_expectations()
     built = stack.generate(source, stack.workdir / "bundle-v2", previous=stack.workdir / "bundle-v1")
     stack.report["rebuilt_projects"] = sorted(p for p, v in built.items() if v == "built")
-    if s.LOAD_MODE == "manifest":  # without manifests in the previous bundle everything is rebuilt
-        stack.checks(
-            "only changed projects re-parsed",
-            set(stack.report["rebuilt_projects"]) == exp.rebuilt_projects,
-            stack.report["rebuilt_projects"],
-        )
+    rebuilt = set(stack.report["rebuilt_projects"])
+    stack.checks("only changed projects re-parsed", rebuilt == exp.rebuilt_projects, sorted(rebuilt))
 
     t_sync = time.time()
     stack.syncer.sync(stack.workdir / "bundle-v2")
-    polled = wait_for(lambda: not unmet(exp, stack.airflow.shapes()), PATCH_TIMEOUT, stack.load.tick)
+
+    def progress() -> str:
+        reparsed = sorted(d for d, ts in stack.load.samples[-1].last_parsed.items() if ts > t_sync and d in exp.dags)
+        missing = unmet(exp, stack.airflow.shapes())
+        return f"changed DAGs re-parsed {len(reparsed)}/{len(exp.dags)} {reparsed}; unmet: {missing}"
+
+    polled = wait_for(
+        "patches visible in Airflow",
+        lambda: not unmet(exp, stack.airflow.shapes()),
+        PATCH_TIMEOUT,
+        tick=stack.load.tick,
+        progress=progress,
+    )
     visible = parse_latency(stack.airflow, set(exp.dags), t_sync) if polled is not None else None
     stack.report["patches_visible_seconds"] = round(visible, 1) if visible is not None else None
     stack.report["patches_seen_by_poll_seconds"] = round(polled, 1) if polled is not None else None
-    stack.load.run_for(s.HOLD_SECONDS)
+    _log_reparse_times(stack, exp, t_sync)
+    stack.load.run_for(s.HOLD_SECONDS, "hold")
     _check_health(stack, exp, t_sync, visible)
     stack.checks.enforce()
+
+
+def _log_reparse_times(stack: Stack, exp: Expectations, t_sync: float) -> None:
+    """When did each changed DAG get re-parsed, relative to the sync (Airflow's own timestamps)."""
+    try:
+        dags = {d["dag_id"]: d.get("last_parsed_time") for d in stack.airflow.dags()}
+    except Exception as e:  # logging only
+        log(f"re-parse times unavailable: {e!r}")
+        return
+    for dag_id in sorted(exp.dags):
+        ts = iso_ts(dags.get(dag_id))
+        log(f"  {dag_id}: re-parsed {ts - t_sync:.1f}s after the sync" if ts else f"  {dag_id}: no parse time")
 
 
 def _check_health(stack: Stack, exp: Expectations, t_sync: float, visible: float | None) -> None:

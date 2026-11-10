@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import sys
 import time
@@ -20,24 +19,24 @@ from e2e.harness.airflow import AirflowAPI, create_namespace, iso_ts
 from e2e.harness.cluster import Cluster
 from e2e.harness.gitserver import Syncer, deploy_git_server
 from e2e.harness.load import Load
+from e2e.harness.log import log
 
 DBT_BIN = os.environ.get("DBT_BIN", "/opt/dbt-venv/bin/dbt")
 
 
 class Checks:
-    """Named pass/fail results, kept in the report. Enforced only when settings.ENFORCE."""
+    """Named pass/fail results: all recorded in the report (and the log), then enforced together."""
 
     def __init__(self, report: dict[str, Any]) -> None:
         self.results: dict[str, dict[str, Any]] = report.setdefault("checks", {})
 
     def __call__(self, name: str, ok: bool, detail: object = "") -> None:
         self.results[name] = {"ok": bool(ok), "detail": str(detail)}
-        print(f"[e2e] {'PASS' if ok else 'FAIL'}  {name}  {detail}", flush=True)
+        log(f"{'PASS' if ok else 'FAIL'}  {name}  ({detail})")
 
     def enforce(self) -> None:
         failed = {k: v["detail"] for k, v in self.results.items() if not v["ok"]}
-        if s.ENFORCE:
-            assert not failed, f"failed checks: {failed}"
+        assert not failed, f"failed checks: {failed}"
 
 
 @dataclass
@@ -47,18 +46,14 @@ class Stack:
     airflow: AirflowAPI
     syncer: Syncer
     load: Load
-    report: dict[str, Any] = field(default_factory=lambda: {"load_mode": s.LOAD_MODE})
+    report: dict[str, Any] = field(default_factory=dict)
 
     @property
     def checks(self) -> Checks:
         return Checks(self.report)
 
     def generate(self, source: Path, out: Path, previous: Path | None = None) -> dict[str, str]:
-        """The CI step (python -m manifest.generate) with a parse env matching this cluster.
-
-        In the dbt_ls comparison modes the manifests are then removed again: the
-        bundle looks like the old setup, where Cosmos had to run `dbt ls` itself.
-        """
+        """The CI step (python -m manifest.generate) with a parse env matching this cluster."""
         parse_env = self.workdir / "parse.env"
         parse_env.write_text(
             f"DBT_PG_HOST={self.cluster.pg_ip()}\nDBT_PG_PORT=5432\nDBT_PG_USER={s.PG_USER}\n"
@@ -69,9 +64,6 @@ class Stack:
         env = {**os.environ, "DBT_BIN": DBT_BIN, "PYTHONDONTWRITEBYTECODE": "1"}
         subprocess.run(cmd, cwd=s.REPO, env=env, check=True)
         result: dict[str, str] = json.loads(out.with_name(out.name + ".summary.json").read_text())["projects"]
-        if s.LOAD_MODE != "manifest":
-            for target in out.glob("projects/*/target"):
-                shutil.rmtree(target)
         return result
 
 
@@ -86,18 +78,36 @@ def bring_up(workdir: Path, cluster: Cluster) -> Stack:
     return Stack(workdir, cluster, airflow, syncer, Load(airflow, cluster.api))
 
 
-def wait_for(predicate: Callable[[], bool], timeout: float, tick: Callable[[], object] | None = None) -> float | None:
-    """Poll until ``predicate()`` holds; seconds waited, or None on timeout. API errors count as 'not yet'."""
-    t0 = time.time()
+def wait_for(
+    what: str,
+    predicate: Callable[[], bool],
+    timeout: float,
+    tick: Callable[[], object] | None = None,
+    progress: Callable[[], str] | None = None,
+) -> float | None:
+    """Poll until ``predicate()`` holds; seconds waited, or None on timeout. API errors count as 'not yet'.
+
+    Logs ``progress()`` every 30s while waiting, so a slow phase is visible in the CI log.
+    """
+    t0, next_log = time.time(), time.time() + 30
+    log(f"waiting for {what} (up to {timeout:.0f}s)")
     while time.time() - t0 < timeout:
         if tick:
             tick()
         try:
             if predicate():
+                log(f"done: {what} after {time.time() - t0:.0f}s")
                 return time.time() - t0
         except (requests.RequestException, KeyError, ValueError):
             pass
+        if progress and time.time() >= next_log:
+            try:
+                log(f"  still waiting for {what} ({time.time() - t0:.0f}s): {progress()}")
+            except (requests.RequestException, KeyError, ValueError) as e:
+                log(f"  still waiting for {what} ({time.time() - t0:.0f}s): API error {e!r}")
+            next_log = time.time() + 30
         time.sleep(5)
+    log(f"TIMEOUT: {what} after {timeout:.0f}s")
     return None
 
 

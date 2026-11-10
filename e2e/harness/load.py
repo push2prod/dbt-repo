@@ -1,15 +1,14 @@
 """Stress driver and observations: keep every DAG running, sample Airflow, probe parse times.
 
-Built to keep observing a stack that is falling over (the dbt_ls comparison
-modes): every call has a timeout, and a failed call is recorded in the sample
-(``api_ok=False``) instead of ending the run.
+Built to keep observing a stack that is struggling: every call has a timeout,
+and a failed call is recorded in the sample (``api_ok=False``) instead of
+ending the run, so the report shows what went wrong.
 """
 
 from __future__ import annotations
 
 import contextlib
 import json
-import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -20,19 +19,10 @@ from kubernetes.stream import stream
 
 from e2e.harness import settings as s
 from e2e.harness.airflow import AirflowAPI, iso_ts
+from e2e.harness.log import log
 
-_DURATION = re.compile(r"(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)")
 _PROBE_TIMEOUT = 180  # seconds for one `airflow dags report` in the DAG processor pod
 COMPONENTS = ("scheduler", "dag-processor", "webserver")
-
-
-def _seconds(value: str) -> float:
-    """'0:00:01.234567' (timedelta str) -> 1.234567."""
-    m = _DURATION.fullmatch(value.strip())
-    if not m:
-        return float(value)
-    h, mi, sec = m.groups()
-    return int(h or 0) * 3600 + int(mi) * 60 + float(sec)
 
 
 def _pod_name(core: client.CoreV1Api, component: str) -> str | None:
@@ -40,8 +30,39 @@ def _pod_name(core: client.CoreV1Api, component: str) -> str | None:
     return pods[0].metadata.name if pods and pods[0].metadata and pods[0].metadata.name else None
 
 
+# Runs inside the DAG processor pod and parses the way Airflow 2.10's processor
+# does: Airflow is already imported (the manager pre-imports `airflow.*` before
+# forking), then a fresh forked child per DAG file. Each child imports the DAG
+# file and with it dbt_factory + Cosmos, so the numbers include that per-parse
+# import cost, as in production.
+_PROBE = """
+import json, logging, os, sys, time
+from pathlib import Path
+logging.disable(logging.CRITICAL)
+from airflow.configuration import conf
+from airflow.models.dagbag import DagBag
+folder = conf.get("core", "dags_folder")
+sys.path.insert(0, folder)
+out = {}
+for f in sorted(Path(folder).glob("*.py")):
+    r, w = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        os.close(r)
+        t = time.monotonic()
+        DagBag(str(f), include_examples=False)
+        os.write(w, str(time.monotonic() - t).encode())
+        os._exit(0)
+    os.close(w)
+    secs = os.read(r, 64)
+    os.waitpid(pid, 0)
+    out[f.name] = float(secs or "inf")
+print(json.dumps(out))
+"""
+
+
 def parse_probe(api: client.ApiClient) -> dict[str, float]:
-    """Parse every DAG file in the DAG processor pod (`airflow dags report`): {file: seconds}.
+    """Parse every DAG file in the DAG processor pod, one forked child per file: {file: seconds}.
 
     {"_failed": 1} if the probe times out or errors (itself a symptom worth recording).
     """
@@ -49,7 +70,7 @@ def parse_probe(api: client.ApiClient) -> dict[str, float]:
     name = _pod_name(core, "dag-processor")
     if name is None:
         return {"_failed": 1.0}
-    cmd = ["timeout", str(_PROBE_TIMEOUT), "airflow", "dags", "report", "-o", "json"]
+    cmd = ["timeout", str(_PROBE_TIMEOUT), "python", "-c", _PROBE]
     try:
         out = stream(
             core.connect_get_namespaced_pod_exec,
@@ -63,13 +84,25 @@ def parse_probe(api: client.ApiClient) -> dict[str, float]:
             tty=False,
             _request_timeout=_PROBE_TIMEOUT + 30,
         )
-        start = out.find("[")
-        rows: list[dict[str, Any]] = json.loads(out[start:]) if start >= 0 else []
+        line = next((x for x in reversed(out.splitlines()) if x.startswith("{")), "")
+        durations: dict[str, float] = json.loads(line) if line else {}
     except (client.ApiException, ValueError, OSError):
         return {"_failed": 1.0}
-    if not rows:
+    if not durations:
         return {"_failed": 1.0}
-    return {str(r["file"]).rsplit("/", 1)[-1]: _seconds(str(r["duration"])) for r in rows}
+    return {str(f).rsplit("/", 1)[-1]: float(d) for f, d in durations.items()}
+
+
+def status_line(smp: Sample, triggered: int) -> str:
+    if not smp.api_ok:
+        return "Airflow API did not answer"
+    hb = smp.heartbeat
+    return (
+        f"{smp.dags} DAGs, {smp.active_runs} active runs, {smp.running_tasks} running tasks, "
+        f"heartbeat scheduler {hb.get('scheduler', float('inf')):.0f}s / processor "
+        f"{hb.get('dag_processor', float('inf')):.0f}s, import errors {smp.import_errors}, "
+        f"restarts {sum(smp.restarts.values())}, runs triggered {triggered}"
+    )
 
 
 def restarts(api: client.ApiClient) -> dict[str, int]:
@@ -105,6 +138,7 @@ class Load:
     probes: list[dict[str, float]] = field(default_factory=list)
     triggered: int = 0
     _next_probe: float = 0.0
+    _next_status: float = 0.0
 
     def start(self) -> None:
         for d in self.airflow.dags():
@@ -143,11 +177,23 @@ class Load:
             self.keep_running()
         smp = self.sample()
         if time.time() >= self._next_probe:
-            self.probes.append(parse_probe(self.api))
+            probe = parse_probe(self.api)
+            self.probes.append(probe)
             self._next_probe = time.time() + 30
+            files = {k: v for k, v in probe.items() if k.endswith(".py")}
+            worst = max(files, key=lambda k: files[k]) if files else None
+            log(
+                f"  parse probe: worst {worst} {files[worst]:.2f}s, all files {sum(files.values()):.2f}s"
+                if worst
+                else "  parse probe: FAILED / timed out"
+            )
+        if time.time() >= self._next_status:
+            log("  load: " + status_line(smp, self.triggered))
+            self._next_status = time.time() + 30
         return smp
 
-    def run_for(self, seconds: float) -> None:
+    def run_for(self, seconds: float, why: str) -> None:
+        log(f"{why}: keeping all DAGs running for {seconds:.0f}s")
         end = time.time() + seconds
         while time.time() < end:
             self.tick()
