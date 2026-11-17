@@ -1,11 +1,15 @@
 # GitLab pipeline: generate each dbt project's target/manifest.json, validate the
-# result, and on the default branch commit it to the `deploy` branch that git-sync
-# tracks. The deploy commit = the source commit's tree + the generated files, each
-# in place (the "overlay": <project>/target/manifest.json, dags/dbt_factory/projects.json).
+# result, and on the default branch publish it on the `deploy` branch that git-sync
+# tracks: `deploy` = the source commit + one commit adding the generated files in
+# place (the "overlay": <project>/target/manifest.json, dbt_packages/,
+# dags/dbt_factory/projects.json).
 #
 # Project setup:
 #   * CI/CD variable DEPLOY_PUSH_TOKEN (masked, protected): a project access token
 #     with write_repository, used to push the `deploy` branch (CI_JOB_TOKEN can't push).
+#   * `deploy` is force-pushed (with a lease) on every deploy: if it is a protected
+#     branch, allow force push for the token's role (Settings > Repository >
+#     Protected branches).
 #   * Settings > CI/CD > General pipelines > "Prevent outdated deployment jobs": on.
 #     With resource_group, an older pipeline can then never deploy over a newer one.
 
@@ -66,13 +70,12 @@ deploy:
     - apt-get update -qq && apt-get install -y -qq git >/dev/null
   script:
     - git remote set-url origin "https://oauth2:${DEPLOY_PUSH_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
-    - if git fetch -q origin deploy; then git worktree add -q -B deploy build/deploy FETCH_HEAD; else git worktree add -q --orphan -b deploy build/deploy; fi
-    # Replace the deploy tree with this commit's tree, then put the overlay on top.
-    - git -C build/deploy rm -rq --ignore-unmatch .
-    - git archive "$CI_COMMIT_SHA" | tar -x -C build/deploy
-    - cp -a build/overlay/. build/deploy/
-    - cd build/deploy
-    - git add -A -f                  # -f: target/ (and dbt_packages/) are in .gitignore
-    - if git diff --cached --quiet; then echo "nothing changed; nothing to deploy"; exit 0; fi
-    - 'git -c user.name="gitlab-ci" -c user.email="gitlab-ci@${CI_SERVER_HOST}" commit -q -m "deploy: ${CI_COMMIT_SHORT_SHA} [skip ci]" -m "Source-Commit: ${CI_COMMIT_SHA}"'
-    - git push origin deploy
+    # `deploy` = this commit + one commit adding the generated files. The lease only
+    # replaces the deploy commit seen here (empty = the branch must not exist yet).
+    - old=$(git ls-remote origin refs/heads/deploy | cut -f1)
+    - git checkout -q -B deploy "$CI_COMMIT_SHA"
+    - cp -a build/overlay/. .
+    # Add exactly the overlay's files; -f because target/ and dbt_packages/ are gitignored.
+    - (cd build/overlay && find . -type f -print0) | git add -f --pathspec-from-file=- --pathspec-file-nul
+    - 'git -c user.name="gitlab-ci" -c user.email="gitlab-ci@${CI_SERVER_HOST}" commit -q --allow-empty -m "deploy: generated files for ${CI_COMMIT_SHORT_SHA} [skip ci]"'
+    - git push -q --force-with-lease="deploy:${old}" origin deploy

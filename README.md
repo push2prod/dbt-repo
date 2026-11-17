@@ -1,9 +1,10 @@
 # dbt-repo
 
 dbt projects for **Cosmos** on **Airflow 2.10** (KubernetesExecutor, git-sync).
-GitLab CI runs `dbt deps` + `dbt parse` for every changed project and commits
-the result to the `deploy` branch: the default branch's tree plus, next to each
-project, `target/manifest.json` and `dbt_packages/`. The DAG processor never runs dbt.
+GitLab CI runs `dbt deps` + `dbt parse` for every changed project and publishes
+the result on the `deploy` branch: the default branch's commit plus one commit
+adding, next to each project, `target/manifest.json` and `dbt_packages/`. The
+DAG processor never runs dbt.
 
 Design and rationale: [docs/ci-cd.md](docs/ci-cd.md).
 
@@ -68,10 +69,12 @@ BUNDLE_DIR=build/deploy-tree SUMMARY_FILE=build/overlay.summary.json pytest
 | job | runs on | does |
 |---|---|---|
 | `validate` | MRs, default branch, manual | generate the overlay (reusing `deploy`), assemble the deploy tree, `pytest` |
-| `deploy` | default branch | commit this commit's tree + the overlay to `deploy` (git-sync tracks it) |
+| `deploy` | default branch | `deploy` = this commit + one commit adding the overlay; force-pushed with a lease (git-sync tracks it) |
 
 Project setup:
 * CI/CD variable `DEPLOY_PUSH_TOKEN` (masked, protected): project access token with `write_repository`.
+* If `deploy` is a protected branch: allow force push for the token's role
+  (Settings > Repository > Protected branches).
 * Settings > CI/CD > General pipelines > "Prevent outdated deployment jobs": on.
 
 ## Common tasks

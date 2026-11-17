@@ -14,8 +14,8 @@ runs out of CPU, misses heartbeats, and looks hung to the scheduler.
   `dags/dbt_factory/projects.json`.
 * Cosmos reads the manifest in an explicit `LoadMode.DBT_MANIFEST` (no silent
   fallback to `dbt ls`), so DAG parsing runs no dbt at all.
-* The `deploy` branch is the default branch's tree with the overlay on top, each
-  file in place next to its project. git-sync delivers it to Airflow.
+* The `deploy` branch is the default branch's commit plus one commit that adds
+  the overlay, each file in place next to its project. git-sync delivers it to Airflow.
 * Environment: Airflow 2.10.5, KubernetesExecutor, astronomer-cosmos 1.10.1,
   dbt 1.11 in its own venv on the image.
 
@@ -98,27 +98,35 @@ python -m manifest.generate --out <overlay> --project <name>   # one project, fo
 | job | runs on | does |
 |---|---|---|
 | `validate` | MRs, default branch, manual | generate vs. the current `deploy`, then `pytest` (ci/checks) |
-| `deploy` | default branch | commit this commit's tree + the overlay from `validate` to `deploy` |
+| `deploy` | default branch | `deploy` = this commit + one commit adding the overlay from `validate` |
 
 `validate` builds the overlay, assembles the exact deploy tree
 (`git archive $CI_COMMIT_SHA` + the overlay) and runs the checks on it. The
-deploy push is a few plain lines in the YAML:
-1. Check out `deploy` into a worktree.
-2. Replace its contents with `git archive $CI_COMMIT_SHA`, copy the overlay on
-   top, and `git add -A -f` (`-f`: `target/` and `dbt_packages/` are gitignored).
-3. Commit only if something changed (`[skip ci]`, with a `Source-Commit:` trailer).
-4. Do a plain push.
+deploy is a few plain lines in the YAML:
+1. Note the current `deploy` SHA (`git ls-remote`).
+2. `git checkout -B deploy $CI_COMMIT_SHA`, copy the overlay in, and add exactly
+   the overlay's files (`-f`: `target/` and `dbt_packages/` are gitignored).
+3. Commit (`deploy: generated files for <sha> [skip ci]`).
+4. `git push --force-with-lease=deploy:<that SHA>`.
 
-Ordering and stale runs are left to GitLab: `resource_group: deploy` runs one
-deploy at a time, and `environment` + **"Prevent outdated deployment jobs"**
-stops an older pipeline from deploying over a newer one. The push uses
-`DEPLOY_PUSH_TOKEN`, a project access token with `write_repository`.
+So `git log deploy` is the default branch's history plus one commit, the deploy
+commit's parent is the source commit it was built from, and `git show deploy`
+(or `git diff master deploy`) is only generated files. Between two deploys the
+diff is the source change plus the manifests (and registry hashes) of the
+projects it touched.
 
-A rejected push (someone moved `deploy` meanwhile) just fails the job. The
-next pipeline rebuilds from the new state.
+`deploy` is force-pushed every time. The lease only replaces the deploy commit
+the job saw (or, the first time, requires that there is none), so a push that
+races another one is rejected instead of overwriting it. Ordering is left to
+GitLab: `resource_group: deploy` runs one deploy at a time, and `environment` +
+**"Prevent outdated deployment jobs"** stops an older pipeline from deploying
+over a newer one. The push uses `DEPLOY_PUSH_TOKEN`, a project access token
+with `write_repository`; a protected `deploy` branch must allow force push for
+its role.
 
-A deploy commit's diff is the source change plus the manifests (and registry
-hashes) of the projects it touched.
+Old deploy commits don't stay on any branch. Roll back by reverting on the
+default branch; the next pipeline deploys that. A rejected push just fails the
+job, and the next pipeline rebuilds from the new state.
 
 ### Checks (`ci/checks/`, run against the assembled deploy tree)
 
@@ -133,6 +141,8 @@ hashes) of the projects it touched.
 
 * `dags.gitSync.ref: deploy`. git-sync v4 (chart ≥ 1.11) reads `ref`, and the
   chart's default is `v2-2-stable`. `branch` alone does nothing.
+* `deploy` is force-pushed. git-sync fetches the ref and checks out the commit it
+  points to, so it doesn't need fast-forwards; confirm once on your setup.
 * KubernetesExecutor task pods clone once (init container, `GITSYNC_ONE_TIME`),
   so a running task's files never change. With Celery or Local executors, set
   `GITSYNC_STALE_WORKTREE_TIMEOUT` above your longest task.
