@@ -1,5 +1,5 @@
-# Layout of this repo for manifest.generate (and, through the bundle's
-# projects.json, for the Airflow DAG factory and the CI checks).
+# Layout of this repo for manifest.generate (and, through the generated
+# dags/dbt_factory/projects.json, for the Airflow DAG factory and the CI checks).
 # Every path is relative to the repo root. Every key is optional; the values
 # below are the defaults (manifest/config.py).
 
@@ -35,9 +35,8 @@ parse_env: manifest/parse.env
 dbt_packages: ship
 
 dags:
-  dir: dags                        # DAG files; deployed as-is, plus dags/dbt_factory
-  config: "dags/config/{name}.yml" # one per project; must exist for every project
-  defaults:                        # per-DAG defaults; a DAG config's `defaults:` overrides them
+  dir: dags                        # hand-written DAG files + dags/dbt_factory
+  defaults:                        # defaults for dbt_dag(...); a DAG file can override any of them
     start_date: "2024-01-01"
     catchup: false
     max_active_runs: 1

@@ -60,8 +60,11 @@ def project(name: str, packages: list[str] | None = None, profile: str = "dbt", 
 
 def dag_files(name: str) -> dict[str, str]:
     return {
-        f"dags/dbt_{name}.py": f'from dbt_factory import build_dags\n\nbuild_dags("{name}", globals())\n',
-        f"dags/config/{name}.yml": f"dags:\n  - dag_id: dbt_{name}\n    select: ['path:models']\n",
+        f"dags/dbt_{name}.py": (
+            f"# Airflow DAG file for the {name} dbt project.\n"
+            "from dbt_factory import dbt_dag\n\n"
+            f'dag = dbt_dag("{name}", dag_id="dbt_{name}", select=["path:models"])\n'
+        ),
     }
 
 
@@ -122,25 +125,17 @@ def test_build_output_and_installed_packages_are_skipped(tmp_path: Path) -> None
         ({"projects/a": project("a", profile="a")}, {}, "uses profile 'a'"),
         ({"projects/a": project("a", extra="target-path: out\n")}, {}, "target-path"),
         ({"projects/a": project("a", ["../../../elsewhere"])}, {}, "outside the source dir"),
-        ({"projects/a": project("a")}, {"dags/config/gone.yml": "dags: []\n"}, "no project has that name"),
         (
             {"projects/a": project("a", ["../../packages/p"])},
             {"packages/p/dbt_project.yml": "name: p\n", "dbt_bundle.yml": "dbt_packages: install\n"},
             "set `dbt_packages: ship`",
         ),
     ],
-    ids=["duplicate-name", "other-profile", "target-path", "package-outside", "orphan-dag-config", "local-pkg-install"],
+    ids=["duplicate-name", "other-profile", "target-path", "package-outside", "local-pkg-install"],
 )
 def test_layout_errors(tmp_path: Path, projects: dict[str, dict[str, str]], extra: dict[str, str], error: str) -> None:
     src = repo(tmp_path, projects, extra)
     with pytest.raises(ConfigError, match=error):
-        discover(load_config(src))
-
-
-def test_missing_dag_config(tmp_path: Path) -> None:
-    src = repo(tmp_path, {"projects/a": project("a")})
-    (src / "dags/config/a.yml").unlink()
-    with pytest.raises(ConfigError, match="has no DAG config"):
         discover(load_config(src))
 
 
@@ -198,10 +193,7 @@ def test_only_changed_projects_are_reparsed(tmp_path: Path) -> None:
 
     # ship mode (the default): dbt_packages/ (dereferenced) next to target/, nothing else from the source.
     reg = json.loads((v1 / "dags/dbt_factory/projects.json").read_text())
-    assert {n: (e["path"], e["dag_config"]) for n, e in reg["projects"].items()} == {
-        "a": ("projects/a", "dags/config/a.yml"),
-        "b": ("projects/b", "dags/config/b.yml"),
-    }
+    assert {n: e["path"] for n, e in reg["projects"].items()} == {"a": "projects/a", "b": "projects/b"}
     assert "projects/a/dbt_packages/shared/macros/m.sql" in files_in(v1)
     assert not (v1 / "projects/a/dbt_packages/shared").is_symlink()
     assert {f for f in files_in(v1) if "dbt_packages" not in f} == {
@@ -213,7 +205,7 @@ def test_only_changed_projects_are_reparsed(tmp_path: Path) -> None:
     cases = [
         ("nothing", lambda: None, {"a": "reused", "b": "reused"}),
         ("model in b", lambda: (src / "projects/b/models/c.sql").write_text("select 2 as id\n"), {"a": "reused", "b": "built"}),
-        ("DAG config", lambda: (src / "dags/config/a.yml").write_text("dags: []\n"), {"a": "reused", "b": "reused"}),
+        ("DAG file", lambda: (src / "dags/dbt_a.py").write_text("# Airflow DAG file, changed\n"), {"a": "reused", "b": "reused"}),
         ("shared package", lambda: (src / "packages/shared/macros/n.sql").write_text("-- n\n"), {"a": "built", "b": "reused"}),
     ]
     previous = v1

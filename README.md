@@ -15,8 +15,7 @@ projects/<dir>/        dbt projects (default glob `projects/*`; any layout via p
 packages/<pkg>/        local dbt packages (optional), used as `local: ../../packages/<pkg>`
 profiles/profiles.yml  dummy profile for CI parsing only; not deployed
 dags/
-  dbt_<name>.py        one DAG file per project (see "Add a project")
-  config/<name>.yml    that project's DAGs: dag_id, schedule, select, exclude
+  *.py                 hand-written DAG files calling dbt_dag(...) (see "Add a DAG")
   dbt_factory/         Cosmos DAG factory; reads projects.json (generated, only on `deploy`)
 manifest/              generate.py · config.py · files.py · dbtvenv.py · parse.env
 ci/checks/             pytest checks on the assembled deploy tree, and on the generator
@@ -28,8 +27,7 @@ requirements/          dbt.txt (own venv) · airflow-image.txt · airflow.txt
 Rules the generator enforces (it fails the pipeline otherwise):
 
 * A project is named by **`name:` in its `dbt_project.yml`**; names are unique.
-  DAG files and DAG configs use that name, not the folder name.
-* Every project has a DAG config, and every DAG config has a project.
+  DAG files pass that name to `dbt_dag(...)`, not the folder name.
 * Projects use the **one profile** in `dbt_bundle.yml` (or set no `profile:`).
   At runtime Cosmos builds it from the Airflow connection in `profile.mapping`.
 * Local packages live inside the repo. `target-path` and `packages-install-path`
@@ -78,17 +76,27 @@ Project setup:
 
 ## Common tasks
 
-* **Add a DAG:** add an entry to `dags/config/<project>.yml`
-  (`dag_id`, `schedule`, `select`, `exclude`, optional `retries`).
-* **Add a project:** add its directory where `projects.include` finds it
-  (`dbt_project.yml`, `packages.yml`, `package-lock.yml`; no `profiles.yml`
-  needed), `dags/config/<name>.yml`, and `dags/dbt_<name>.py`, where `<name>`
-  is the project's dbt `name:`:
+* **Add a DAG:** in a DAG file under `dags/` (one per project keeps parse
+  times independent), call the factory and assign the result to a module-level
+  name. `<name>` is the project's dbt `name:`:
   ```python
   # Airflow DAG file: Cosmos DAGs for the "<name>" dbt project.
-  from dbt_factory import build_dags
+  from dbt_factory import dbt_dag
 
-  build_dags("<name>", globals())
+  campaigns = dbt_dag(
+      "<name>",
+      dag_id="dbt_<name>_campaigns",
+      schedule="0 3 * * *",
+      select=["tag:campaigns"],
+      exclude=["tag:deprecated"],
+  )
   ```
+  Defaults (start_date, retries, tags, ...) come from `dags.defaults` in
+  `dbt_bundle.yml`; pass any of them, or any other `DbtDag`/`DAG` argument, to
+  override. Keep the word "Airflow" in the file (a comment is enough): Airflow's
+  safe mode skips `.py` files that don't contain both "airflow" and "dag".
+* **Add a project:** add its directory where `projects.include` finds it
+  (`dbt_project.yml`, `packages.yml`, `package-lock.yml`; no `profiles.yml`
+  needed), then a DAG file for it as above.
 * **Shared macros** in local packages are called with the package prefix:
   `{{ shared_macros.cents_to_dollars('amount_cents') }}`.

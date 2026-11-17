@@ -1,10 +1,28 @@
-"""Build Cosmos DAGs from the registry (projects.json, written by manifest.generate).
+"""Build Cosmos DAGs for the dbt projects in the registry (projects.json, written by manifest.generate).
+
+DAG files are written by hand and call ``dbt_dag`` once per DAG:
+
+    # Airflow DAG file: Cosmos DAGs for the "marketing" dbt project.
+    from dbt_factory import dbt_dag
+
+    marketing_campaigns = dbt_dag(
+        "marketing",                       # the project's dbt `name:`
+        dag_id="dbt_marketing_campaigns",
+        schedule="0 3 * * *",
+        select=["tag:campaigns"],
+    )
+
+Assign the result to a module-level name: Airflow only picks up DAGs it finds
+in the file's globals. Keep "airflow" somewhere in the file (the comment above
+does it): Airflow's safe mode skips files without both "airflow" and "dag". CI
+fails on either mistake (ci/checks/test_dag_integrity.py). Any other ``DbtDag``/``DAG`` argument (description,
+callbacks, ``operator_args``, ``default_args`` ...) is passed through.
 
 The deploy branch is the source tree plus the generated files, each in place:
 <project>/target/manifest.json and this directory's projects.json.
 
-Parse-time cost: one small JSON read, then one YAML read plus one
-manifest.json read per project. No dbt subprocess runs at parse time.
+Parse-time cost: one small JSON read, then one manifest.json read per DAG.
+No dbt subprocess runs at parse time.
 
 * ``LoadMode.DBT_MANIFEST`` is set explicitly. With ``AUTOMATIC``, a
   missing manifest silently falls back to ``DBT_LS``: a `dbt ls` subprocess
@@ -28,16 +46,19 @@ import functools
 import importlib
 import json
 import os
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-import yaml
 from cosmos import DbtDag, ExecutionConfig, LoadMode, ProfileConfig, ProjectConfig, RenderConfig
 from cosmos.constants import InvocationMode
 
 FACTORY_DIR = Path(__file__).resolve().parent
 DBT_EXECUTABLE = os.environ.get("DBT_EXECUTABLE", "/opt/dbt-venv/bin/dbt")
+# Every dag_id dbt_dag() created in this process. CI compares it with what Airflow
+# collected: a DAG not assigned to a module-level name is silently dropped.
+CREATED: list[str] = []
 
 
 @functools.cache
@@ -51,27 +72,11 @@ def bundle_root() -> Path:
     return FACTORY_DIR.parents[len(Path(registry()["dags_dir"]).parts)]
 
 
-def _project(project: str) -> dict[str, Any]:
+def project_dir(project: str) -> Path:
     projects: dict[str, Any] = registry()["projects"]
     if project not in projects:
         raise KeyError(f"dbt project {project!r} is not in projects.json (known: {sorted(projects)})")
-    entry: dict[str, Any] = projects[project]
-    return entry
-
-
-@functools.cache
-def load_config(project: str) -> dict[str, Any]:
-    rel = _project(project)["dag_config"]
-    cfg = yaml.safe_load((bundle_root() / rel).read_text())
-    if not isinstance(cfg, dict) or not isinstance(cfg.get("dags"), list):
-        raise ValueError(f"{rel} must be a mapping with a `dags` list")
-    return cfg
-
-
-def dag_specs(project: str) -> list[dict[str, Any]]:
-    """The DAG specs for a project with defaults applied. Also used by the CI parity test."""
-    cfg = load_config(project)
-    return [{**registry()["dag_defaults"], **cfg.get("defaults", {}), **spec} for spec in cfg["dags"]]
+    return bundle_root() / projects[project]["path"]
 
 
 def profile_config() -> ProfileConfig:
@@ -87,11 +92,11 @@ def profile_config() -> ProfileConfig:
     )
 
 
-def build_dags(project: str, namespace: dict[str, Any]) -> None:
-    project_dir = bundle_root() / _project(project)["path"]
-    project_config = ProjectConfig(
-        dbt_project_path=project_dir,
-        manifest_path=project_dir / "target" / "manifest.json",
+def project_config(project: str) -> ProjectConfig:
+    path = project_dir(project)
+    return ProjectConfig(
+        dbt_project_path=path,
+        manifest_path=path / "target" / "manifest.json",
         project_name=project,
         # `dbt_packages: ship`: dbt_packages/ is in the deploy commit, built by CI.
         # `install`: Cosmos runs `dbt deps` in each task's temp dir.
@@ -99,25 +104,52 @@ def build_dags(project: str, namespace: dict[str, Any]) -> None:
         # CI does not ship partial_parse.msgpack (its profile is a dummy, not the runtime mapping).
         partial_parse=False,
     )
-    for spec in dag_specs(project):
-        dag_id = spec["dag_id"]
-        namespace[dag_id] = DbtDag(
-            dag_id=dag_id,
-            schedule=spec.get("schedule"),
-            start_date=datetime.fromisoformat(str(spec["start_date"])),
-            catchup=spec["catchup"],
-            max_active_runs=spec["max_active_runs"],
-            tags=[*spec["tags"], f"dbt:{project}"],
-            default_args={"retries": spec["retries"], "retry_delay": timedelta(seconds=spec["retry_delay_seconds"])},
-            project_config=project_config,
-            profile_config=profile_config(),
-            execution_config=ExecutionConfig(
-                dbt_executable_path=DBT_EXECUTABLE,
-                invocation_mode=InvocationMode.SUBPROCESS,
-            ),
-            render_config=RenderConfig(
-                load_method=LoadMode.DBT_MANIFEST,
-                select=spec.get("select", []),
-                exclude=spec.get("exclude", []),
-            ),
-        )
+
+
+def dbt_dag(
+    project: str,
+    dag_id: str,
+    *,
+    select: Sequence[str] = (),
+    exclude: Sequence[str] = (),
+    schedule: Any = None,
+    **dag_kwargs: Any,
+) -> DbtDag:
+    """One Cosmos DAG for ``project`` (its dbt `name:`), running the nodes ``select``/``exclude`` pick.
+
+    Defaults (dbt_bundle.yml `dags.defaults`): start_date, catchup,
+    max_active_runs, tags, retries, retry_delay_seconds. Pass any of them, or any
+    other DbtDag/DAG argument, to override. ``default_args`` is merged with the
+    retry defaults; ``tags`` gets ``dbt:<project>`` appended.
+    """
+    defaults = dict(registry()["dag_defaults"])
+    start_date = dag_kwargs.pop("start_date", defaults.pop("start_date"))
+    if not isinstance(start_date, datetime):
+        start_date = datetime.fromisoformat(str(start_date))
+    retries = dag_kwargs.pop("retries", defaults.pop("retries"))
+    retry_delay = timedelta(seconds=dag_kwargs.pop("retry_delay_seconds", defaults.pop("retry_delay_seconds")))
+    tags = [*dag_kwargs.pop("tags", defaults.pop("tags")), f"dbt:{project}"]
+    default_args = {"retries": retries, "retry_delay": retry_delay, **dag_kwargs.pop("default_args", {})}
+    for key, value in defaults.items():  # catchup, max_active_runs
+        dag_kwargs.setdefault(key, value)
+
+    CREATED.append(dag_id)
+    return DbtDag(
+        dag_id=dag_id,
+        schedule=schedule,
+        start_date=start_date,
+        tags=tags,
+        default_args=default_args,
+        project_config=project_config(project),
+        profile_config=profile_config(),
+        execution_config=ExecutionConfig(
+            dbt_executable_path=DBT_EXECUTABLE,
+            invocation_mode=InvocationMode.SUBPROCESS,
+        ),
+        render_config=RenderConfig(
+            load_method=LoadMode.DBT_MANIFEST,
+            select=list(select),
+            exclude=list(exclude),
+        ),
+        **dag_kwargs,
+    )

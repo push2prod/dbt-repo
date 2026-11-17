@@ -36,7 +36,7 @@ defaults to the values shown in it (`manifest/config.py`):
   Cosmos runs `dbt deps` in every task: that needs network to the package
   sources, and can't work with `local:` packages (Cosmos runs each task in a
   temp dir, where `../../packages/x` doesn't resolve), so the generator refuses it then.
-* `dags`: the DAG directory, the per-project DAG config path (`{name}`), and DAG defaults.
+* `dags`: the DAG directory, and defaults for `dbt_dag(...)`.
 
 ## Manifest generation (`manifest/`)
 
@@ -52,8 +52,7 @@ python -m manifest.generate --out <overlay> --project <name>   # one project, fo
   it uses at the same relative paths, is copied to a temp dir and parsed there.
   `--out` receives only the generated files.
 * **Fails loudly on layout problems** instead of deploying without a project:
-  two projects with the same `name:`, a project using another profile, a
-  project without a DAG config (or a DAG config without a project), a local
+  two projects with the same `name:`, a project using another profile, a local
   package outside the repo, a non-default `target-path` / `packages-install-path`.
 * **Only changed projects are re-parsed.** Each project has an *input hash*
   covering its files, the local packages it uses (`packages.yml` `local:`,
@@ -68,8 +67,8 @@ python -m manifest.generate --out <overlay> --project <name>   # one project, fo
   runtime. `dbt deps` symlinks local packages; the shipped `dbt_packages/` has
   them dereferenced.
 * **The registry.** The generator writes `<dags dir>/dbt_factory/projects.json`:
-  every project's path and DAG config, the profile name, target and mapping, and
-  the DAG defaults. The DAG factory and the CI checks read it instead of
+  every project's path and input hash, the profile name, target and mapping,
+  and the DAG defaults. The DAG factory and the CI checks read it instead of
   assuming a layout, so they can't drift from what CI built.
 * **No partial parse.** Only `manifest.json` ships. dbt reuses a
   `partial_parse.msgpack` only if the runtime profile hashes the same as the CI
@@ -79,15 +78,16 @@ python -m manifest.generate --out <overlay> --project <name>   # one project, fo
 
 ## DAGs (`dags/dbt_factory/` + one file per project)
 
-* `dags/dbt_<project>.py` is two lines calling `build_dags("<project>")`, with
-  the project's dbt `name:`.
-  **One file per project**, so a big project can't push another project's
-  file past the per-file parse timeout.
-* `dags/config/<project>.yml` (`dags.config` in `dbt_bundle.yml`) lists that project's DAGs: `dag_id`, `schedule`,
-  `select`, `exclude`, optional `retries`.
-* The factory sets an explicit `DBT_MANIFEST` load mode, runs dbt from the venv as a
-  subprocess (`DBT_EXECUTABLE`), installs no deps at task time, builds the
-  profile from the Airflow connection (`profile.mapping`), and defaults to
+* DAG files are written by hand. Each DAG is one call,
+  `dbt_dag("<project>", dag_id=..., schedule=..., select=[...], exclude=[...])`,
+  with the project's dbt `name:`, assigned to a module-level name. **One file
+  per project** keeps a big project from pushing another project's file past
+  the per-file parse timeout.
+* `dbt_dag` fills in what must not vary: an explicit `DBT_MANIFEST` load mode,
+  the shipped manifest's path, dbt from the venv as a subprocess
+  (`DBT_EXECUTABLE`), `install_dbt_deps` per `dbt_packages`, the profile from
+  the Airflow connection (`profile.mapping`). Everything else is a normal
+  `DbtDag` argument; defaults come from `dags.defaults`, including
   `retries: 1`. The retry covers a task pod that starts
   just after a deploy and clones the new revision.
 
@@ -124,9 +124,9 @@ hashes) of the projects it touched.
 
 | test | guards against |
 |---|---|
-| `test_dag_integrity` | import errors, slow files, empty DAGs, **any subprocess at parse time** (a `dbt ls` fallback) |
-| `test_selector_parity` | Cosmos' Python selector disagreeing with `dbt ls` (e.g. `fqn:` wildcards select nothing in Cosmos) |
-| `test_generate` | layout errors not caught; rebuilding the wrong projects (model change → 1 project, DAG config → none, shared package → its users) |
+| `test_dag_integrity` | import errors, slow files, empty DAGs, **any subprocess at parse time** (a `dbt ls` fallback), a DAG file whose `dbt_dag(...)` creates no DAG (not assigned to a module-level name, or skipped by safe mode), a Cosmos DAG not in `DBT_MANIFEST` mode or without its manifest |
+| `test_selector_parity` | Cosmos' Python selector disagreeing with `dbt ls`, for every Cosmos DAG the DAG files create (e.g. `fqn:` wildcards select nothing in Cosmos) |
+| `test_generate` | layout errors not caught; rebuilding the wrong projects (model change → 1 project, DAG file → none, shared package → its users) |
 | `test_compile` | SQL that parses but can't render, e.g. a package macro without its prefix |
 
 ## git-sync settings that matter

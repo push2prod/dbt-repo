@@ -44,7 +44,7 @@ DEFAULTS: dict[str, Any] = {
     "dbt_packages": "ship",
     "dags": {
         "dir": "dags",
-        "config": "dags/config/{name}.yml",
+        # Defaults for dbt_dag(...) in the factory; a DAG file overrides them per DAG.
         "defaults": {
             "start_date": "2024-01-01",
             "catchup": False,
@@ -98,10 +98,6 @@ class Config:
         """Relative to the source (and to the bundle root)."""
         return Path(self.raw["dags"]["dir"])
 
-    def dag_config(self, name: str) -> Path:
-        """Relative to the source (and to the bundle root)."""
-        return Path(self.raw["dags"]["config"].format(name=name))
-
 
 def _merge(base: dict[str, Any], override: dict[str, Any], where: str = "") -> dict[str, Any]:
     out = copy.deepcopy(base)
@@ -130,8 +126,6 @@ def load_config(source: Path, path: Path | None = None) -> Config:
     merged = _merge(DEFAULTS, raw)
     if merged["dbt_packages"] not in ("install", "ship"):
         raise ConfigError(f"{CONFIG_FILE}: dbt_packages must be 'install' or 'ship', not {merged['dbt_packages']!r}")
-    if "{name}" not in merged["dags"]["config"]:
-        raise ConfigError(f"{CONFIG_FILE}: dags.config must contain {{name}}")
     return Config(source=source.resolve(), raw=merged)
 
 
@@ -212,16 +206,6 @@ def discover(config: Config, skip: list[Path] | None = None) -> list[Project]:
     if not factory.is_file():
         errors.append(f"{factory.relative_to(source)}: missing; the DAG factory must be in the DAG dir")
 
-    names = {p.name for p in projects}
-    for p in projects:
-        if not (source / config.dag_config(p.name)).is_file():
-            errors.append(f"{p.path}: project {p.name!r} has no DAG config {config.dag_config(p.name)}")
-    prefix, _, suffix = config.raw["dags"]["config"].partition("{name}")
-    for f in sorted(source.glob(prefix + "*" + suffix)):
-        rel = f.relative_to(source).as_posix()
-        orphan = rel[len(prefix) : len(rel) - len(suffix)] if suffix else rel[len(prefix) :]
-        if orphan not in names:
-            errors.append(f"{rel}: DAG config for {orphan!r}, but no project has that name")
 
     if errors:
         raise ConfigError("invalid dbt layout:\n  " + "\n  ".join(errors))

@@ -2,9 +2,10 @@
 
 In DBT_LS mode dbt does the selection itself. In DBT_MANIFEST mode Cosmos
 re-implements dbt's selector syntax in Python, and only part of it. This test
-runs every select/exclude from dags/config through both and compares them, so
-a selector Cosmos reads differently (or ignores) fails CI instead of quietly
-changing which models a DAG runs.
+takes every Cosmos DAG the DAG files create, and compares the nodes it rendered
+with what `dbt ls` selects for the same select/exclude, so a selector Cosmos
+reads differently (or ignores) fails CI instead of quietly changing which
+models a DAG runs.
 
 `dbt ls` needs no warehouse connection; it runs once per DAG, in CI only.
 """
@@ -14,14 +15,14 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-from collections.abc import Iterator
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
 
 import pytest
-from _pytest.mark.structures import ParameterSet
-from conftest import DAGS_DIR, PROJECTS, dbt_profile_args, load_dag_specs, project_path
+from conftest import PROJECTS, dbt_dags, dbt_profile_args, project_path
+
+if TYPE_CHECKING:
+    from airflow.models.dagbag import DagBag
 
 # Resource types that become Airflow tasks. Tests are attached by Cosmos'
 # test_behavior and compared separately by dbt's indirect selection rules, so
@@ -29,59 +30,38 @@ from conftest import DAGS_DIR, PROJECTS, dbt_profile_args, load_dag_specs, proje
 TASK_TYPES = {"model", "seed", "snapshot"}
 
 
-@dataclass(frozen=True)
-class Selection:
-    project: str
-    select: list[str]
-    exclude: list[str]
-
-
-def _specs() -> Iterator[ParameterSet]:
-    dag_specs = load_dag_specs(DAGS_DIR)
-    for project in PROJECTS:
-        for spec in dag_specs(project):
-            yield pytest.param(project, spec, id=spec["dag_id"])
-
-
-def dbt_ls(dbt_bin: str, project_dir: Path, sel: Selection, env: dict[str, str]) -> set[str]:
+def dbt_ls(dbt_bin: str, project_dir: Path, select: list[str], exclude: list[str], env: dict[str, str]) -> set[str]:
     cmd = [dbt_bin, "ls", "--project-dir", str(project_dir), *dbt_profile_args(), "--quiet", "--no-use-colors"]
     cmd += ["--output", "json", "--output-keys", "unique_id", "resource_type"]
-    if sel.select:
-        cmd += ["--select", *sel.select]
-    if sel.exclude:
-        cmd += ["--exclude", *sel.exclude]
+    if select:
+        cmd += ["--select", *select]
+    if exclude:
+        cmd += ["--exclude", *exclude]
     r = subprocess.run(cmd, env={**os.environ, **env}, capture_output=True, text=True, check=False)
     assert r.returncode == 0, r.stdout + r.stderr
     rows = [json.loads(line) for line in r.stdout.splitlines() if line.startswith("{")]
     return {str(row["unique_id"]) for row in rows if row["resource_type"] in TASK_TYPES}
 
 
-def cosmos_select(project_dir: Path, sel: Selection) -> set[str]:
-    from cosmos.config import ExecutionConfig, ProjectConfig, RenderConfig
-    from cosmos.constants import LoadMode
-    from cosmos.dbt.graph import DbtGraph
-
-    graph = DbtGraph(
-        project=ProjectConfig(dbt_project_path=project_dir, manifest_path=project_dir / "target/manifest.json"),
-        render_config=RenderConfig(load_method=LoadMode.DBT_MANIFEST, select=sel.select, exclude=sel.exclude),
-        execution_config=ExecutionConfig(dbt_project_path=project_dir),
-    )
-    graph.load_from_dbt_manifest()
-    return {str(uid) for uid, n in graph.filtered_nodes.items() if n.resource_type.value in TASK_TYPES}
-
-
-@pytest.mark.parametrize(("project", "spec"), list(_specs()))
+@pytest.mark.parametrize("project", PROJECTS)
 def test_manifest_selection_matches_dbt_ls(
-    bundle_dir: Path, dbt_tree: Path, parse_env: dict[str, str], dbt_bin: str, project: str, spec: dict[str, Any]
+    dagbag: DagBag, dbt_tree: Path, parse_env: dict[str, str], dbt_bin: str, project: str
 ) -> None:
-    # dbt ls runs in the scratch copy so it cannot rewrite the deploy tree's target/ files.
-    sel = Selection(project, list(spec.get("select", [])), list(spec.get("exclude", [])))
-
-    expected = dbt_ls(dbt_bin, project_path(dbt_tree, project), sel, parse_env)
-    actual = cosmos_select(project_path(bundle_dir, project), sel)
-
-    assert expected, f"{spec['dag_id']}: selector matches nothing in dbt"
-    assert actual == expected, (
-        f"{spec['dag_id']}: Cosmos manifest selection differs from dbt ls\n"
-        f"  only in dbt ls: {sorted(expected - actual)}\n  only in Cosmos: {sorted(actual - expected)}"
-    )
+    dags = {d: dag for d, dag in dbt_dags(dagbag).items() if dag.dbt_graph.project.project_name == project}
+    if not dags:
+        pytest.skip(f"no DAG uses project {project!r}")
+    errors = []
+    for dag_id, dag in sorted(dags.items()):
+        rc = dag.dbt_graph.render_config
+        select, exclude = list(rc.select or []), list(rc.exclude or [])
+        # dbt ls runs in the scratch copy so it cannot rewrite the deploy tree's target/ files.
+        expected = dbt_ls(dbt_bin, project_path(dbt_tree, project), select, exclude, parse_env)
+        actual = {str(u) for u, n in dag.dbt_graph.filtered_nodes.items() if n.resource_type.value in TASK_TYPES}
+        if not expected:
+            errors.append(f"{dag_id}: selector matches nothing in dbt (select={select}, exclude={exclude})")
+        elif actual != expected:
+            errors.append(
+                f"{dag_id}: Cosmos manifest selection differs from dbt ls (select={select}, exclude={exclude})\n"
+                f"  only in dbt ls: {sorted(expected - actual)}\n  only in Cosmos: {sorted(actual - expected)}"
+            )
+    assert not errors, "\n".join(errors)

@@ -9,19 +9,22 @@ with the generated overlay on top, the same files CI commits to `deploy`.
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 import shutil
 import subprocess
-from collections.abc import Callable
+import sys
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 import pytest
 
 from manifest.dbtvenv import DBT_BIN
 from manifest.files import load_env_file
+
+if TYPE_CHECKING:
+    from airflow.models.dagbag import DagBag
 
 REPO = Path(__file__).resolve().parents[2]
 # The deploy tree under test. Read at import time too: parametrized tests need
@@ -41,8 +44,6 @@ SUMMARY = _load(SUMMARY_FILE)
 REGISTRY = _load(BUNDLE / SUMMARY["registry"]) if "registry" in SUMMARY else {}
 PROJECTS = sorted(REGISTRY.get("projects", {}))
 DAGS_DIR = BUNDLE / REGISTRY.get("dags_dir", "dags")
-
-DagSpecs = Callable[[str], list[dict[str, Any]]]
 
 
 @pytest.fixture(scope="session")
@@ -94,16 +95,36 @@ def dbt_profile_args() -> list[str]:
     return ["--profiles-dir", SUMMARY["ci_profiles_dir"], "--profile", profile["name"], "--target", profile["target"]]
 
 
-def load_dag_specs(dags_dir: Path) -> DagSpecs:
-    """Import dags/dbt_factory under a private name.
+@pytest.fixture(scope="session")
+def dagbag(bundle_dir: Path) -> Iterator[DagBag]:
+    """The deploy tree's DAG dir parsed once, as the DAG processor would.
 
-    That way the DagBag test still imports the real `dbt_factory` from the
-    bundle, not this cached copy from the repo.
+    While the DAG files are parsed, starting any process fails the parse: Cosmos
+    in DBT_LS mode (or AUTOMATIC with a missing manifest) runs `dbt ls` there.
     """
-    spec = importlib.util.spec_from_file_location("_dbt_factory_specs", dags_dir / "dbt_factory" / "__init__.py")
-    if spec is None or spec.loader is None:
-        raise ImportError(f"cannot load dbt_factory from {dags_dir}")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    specs: DagSpecs = mod.dag_specs
-    return specs
+    mp = pytest.MonkeyPatch()
+    mp.setenv("AIRFLOW__CORE__LOAD_EXAMPLES", "False")
+    mp.setenv("AIRFLOW__CORE__UNIT_TEST_MODE", "True")
+    # Import Airflow + Cosmos *before* the guard goes up: their own import-time
+    # probes (e.g. platform.architecture() shelling out to `file`) are not the
+    # DAG files' fault. After this, only the DAG files' own work runs.
+    import cosmos  # noqa: F401
+    from airflow.models.dagbag import DagBag
+
+    def forbidden(*args: object, **kwargs: object) -> NoReturn:
+        raise AssertionError(f"subprocess started at DAG parse time: {args[:1]}")
+
+    with pytest.MonkeyPatch.context() as guard:
+        for name in ("Popen", "run", "call", "check_call", "check_output"):
+            guard.setattr(subprocess, name, forbidden)
+        sys.path.insert(0, str(DAGS_DIR))
+        bag = DagBag(dag_folder=str(DAGS_DIR), include_examples=False, safe_mode=True)
+    yield bag
+    mp.undo()
+
+
+def dbt_dags(bag: DagBag) -> dict[str, Any]:
+    """{dag_id: DbtDag} for every Cosmos DAG in ``bag``."""
+    from cosmos import DbtDag
+
+    return {dag_id: dag for dag_id, dag in bag.dags.items() if isinstance(dag, DbtDag)}
