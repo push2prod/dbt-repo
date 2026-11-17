@@ -52,7 +52,7 @@ REGISTRY = "projects.json"
 
 
 def log(msg: str) -> None:
-    print(f"[manifest] {msg}", flush=True)
+    print(f"[manifest] {msg}", file=sys.stderr, flush=True)
 
 
 def _digest(path: Path) -> str:
@@ -201,6 +201,8 @@ def main() -> None:
     args = ap.parse_args()
     try:
         config = load_config(args.source.resolve(), args.config.resolve() if args.config else None)
+        config_file = args.config.resolve() if args.config else config.source / "dbt_bundle.yml"
+        log(f"source: {config.source}  config: {config_file}{'' if config_file.is_file() else ' (not found: defaults)'}")
         if args.list:
             projects = discover(config, skip=[args.out] if args.out else [])
             print(json.dumps(registry(config, projects), indent=2))

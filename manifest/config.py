@@ -204,7 +204,10 @@ def discover(config: Config, skip: list[Path] | None = None) -> list[Project]:
                 )
     factory = source / config.dags_dir / "dbt_factory" / "__init__.py"
     if not factory.is_file():
-        errors.append(f"{factory.relative_to(source)}: missing; the DAG factory must be in the DAG dir")
+        errors.append(
+            f"DAG factory not found at {factory} (source: {source}, dags.dir: {config.dags_dir}). "
+            "--source must be the repo root, and dags/dbt_factory/ must be committed"
+        )
 
 
     if errors:
