@@ -1,20 +1,20 @@
-# GitLab pipeline: same steps as .github/workflows/, same scripts.
+# GitLab pipeline: build the Airflow bundle (dbt manifests + DAGs), validate it,
+# and on the default branch commit it to the `deploy` branch that git-sync tracks.
 #
 # Project setup:
 #   * CI/CD variable DEPLOY_PUSH_TOKEN (masked, protected): a project access token
 #     with write_repository, used to push the `deploy` branch (CI_JOB_TOKEN can't push).
 #   * Settings > CI/CD > General pipelines > "Prevent outdated deployment jobs": on.
 #     With resource_group, an older pipeline can then never deploy over a newer one.
-#   * e2e: a runner that allows privileged containers (docker:dind + K3s).
 
-stages: [lint, validate, deploy, e2e]
+stages: [validate, deploy]
 
 default:
   image: python:3.12-slim
 
 variables:
   AIRFLOW_CONSTRAINTS: https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.12.txt
-  DBT_SOURCE: e2e/fixtures          # the dbt content to build; a real dbt repo uses "."
+  DBT_SOURCE: "."                   # dir holding projects/, packages/ and dags/
   PYTHONDONTWRITEBYTECODE: "1"
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
   DBT_BIN: /opt/dbt-venv/bin/dbt
@@ -32,29 +32,15 @@ workflow:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
     - if: $CI_PIPELINE_SOURCE == "web"
 
-.dbt_venv: &dbt_venv
-  - apt-get update -qq && apt-get install -y -qq git >/dev/null
-  - python -m venv /opt/dbt-venv && /opt/dbt-venv/bin/pip install -q -r requirements/dbt.txt
-
-lint:
-  stage: lint
-  before_script:
-    - apt-get update -qq && apt-get install -y -qq git >/dev/null
-    - pip install -q -r requirements/airflow.txt -c "$AIRFLOW_CONSTRAINTS"
-    - pip install -q -r requirements/e2e.txt -r requirements/dev.txt   # newer than the constraints pin
-  script:
-    - ruff check .
-    - ruff format --check .
-    - mypy
-    - git ls-files -z '*.sh' | xargs -0 --no-run-if-empty shellcheck
-    - python ci/check_lengths.py
-
 validate:
   stage: validate
   before_script:
-    - *dbt_venv
+    - apt-get update -qq && apt-get install -y -qq git >/dev/null
+    - python -m venv /opt/dbt-venv && /opt/dbt-venv/bin/pip install -q -r requirements/dbt.txt
     - pip install -q -r requirements/airflow.txt -c "$AIRFLOW_CONSTRAINTS"
   script:
+    # `manifest.generate` runs `dbt deps` + `dbt parse` per changed project and
+    # writes target/manifest.json + partial_parse.msgpack into the bundle.
     - mkdir -p build/previous
     - if git fetch -q --depth 1 origin deploy; then git archive FETCH_HEAD | tar -x -C build/previous; fi
     - python -m manifest.generate --source "$DBT_SOURCE" --out build/bundle --previous build/previous
@@ -82,31 +68,3 @@ deploy:
     - if git diff --cached --quiet; then echo "bundle unchanged; nothing to deploy"; exit 0; fi
     - 'git -c user.name="gitlab-ci" -c user.email="gitlab-ci@${CI_SERVER_HOST}" commit -q -m "deploy: ${CI_COMMIT_SHORT_SHA} [skip ci]" -m "Source-Commit: ${CI_COMMIT_SHA}"'
     - git push origin deploy
-
-e2e:
-  stage: e2e
-  needs: []
-  image: python:3.12
-  services:
-    - name: docker:27-dind
-      alias: docker
-  variables:
-    DOCKER_HOST: tcp://docker:2375
-    DOCKER_TLS_CERTDIR: ""
-    E2E_REPORT: build/e2e/report.json
-  rules:
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE == "push"
-    - if: $CI_PIPELINE_SOURCE == "web"
-    - when: manual
-      allow_failure: true
-  timeout: 45m
-  before_script:
-    - python -m venv /opt/dbt-venv && /opt/dbt-venv/bin/pip install -q -r requirements/dbt.txt
-    - pip install -q -r requirements/e2e.txt
-  script:
-    - pytest e2e -v -s -p no:cacheprovider
-  artifacts:
-    when: always
-    paths: [build/e2e]
-    expire_in: 2 weeks
-

@@ -3,8 +3,8 @@
     python -m manifest.generate --source <dir> --out bundle/ [--previous previous-bundle/] [--parse-env file]
 
 ``--source`` holds the dbt content: projects/, packages/ (local dbt packages) and
-dags/ (one DAG file per project + dags/config/). In this repo that is the mock
-content in e2e/fixtures; in a real dbt repo it is the repo root. The DAG
+dags/ (one DAG file per project + dags/config/). In CI it is the repo root
+(``DBT_SOURCE: "."``). The DAG
 factory (dags/dbt_factory at the repo root) is tooling and is added to every bundle.
 
 Bundle layout (mirrors the repo, so ``local: ../../packages/shared_macros`` still resolves):
@@ -32,7 +32,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import shutil
 from pathlib import Path
 
@@ -121,9 +120,6 @@ def main() -> None:
     result = generate(args.source.resolve(), out, previous, args.parse_env.resolve(), reuse=not args.no_reuse)
     summary = out.with_name(out.name + ".summary.json")
     summary.write_text(json.dumps({"projects": result}, indent=2) + "\n")
-    if gh := os.environ.get("GITHUB_STEP_SUMMARY"):
-        with open(gh, "a") as fh:
-            fh.write("| project | result |\n|---|---|\n" + "".join(f"| {k} | {v} |\n" for k, v in result.items()))
 
 
 if __name__ == "__main__":

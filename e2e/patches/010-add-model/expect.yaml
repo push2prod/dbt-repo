@@ -1,7 +1,0 @@
-description: a new model in the accounts domain becomes a new task
-rebuilt_projects: [core]
-dags:
-  dbt_core_accounts:
-    tasks_added: [accounts_churn]
-    upstream:
-      accounts_churn: [dim_accounts_entity]

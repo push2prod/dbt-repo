@@ -1,9 +1,0 @@
-diff --git a/projects/finance/models/billing/billing_summary.sql b/projects/finance/models/billing/billing_summary.sql
-deleted file mode 100644
-index d6f317f..0000000
---- a/projects/finance/models/billing/billing_summary.sql
-+++ /dev/null
-@@ -1,3 +0,0 @@
--{{ config(tags=['billing']) }}
--select (select count(*) from {{ ref('dim_billing_entity') }}) as entities,
--       (select sum(amount) from {{ ref('fct_billing_daily') }}) as total_amount

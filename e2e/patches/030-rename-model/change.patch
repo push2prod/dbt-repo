@@ -1,4 +1,0 @@
-diff --git a/projects/marketing/models/content/content_summary.sql b/projects/marketing/models/content/content_report.sql
-similarity index 100%
-rename from projects/marketing/models/content/content_summary.sql
-rename to projects/marketing/models/content/content_report.sql

@@ -1,6 +1,5 @@
 # Apache Airflow Helm chart values for Airflow 2.10: the parts that matter
-# for this repo. Every [scheduler] value below is also what
-# strain/run_strain_test.sh runs with.
+# for this repo.
 
 executor: KubernetesExecutor
 
@@ -18,7 +17,7 @@ env:
 dags:
   gitSync:
     enabled: true
-    repo: https://github.com/push2prod/dbt-repo.git
+    repo: https://gitlab.example.com/your-group/your-dbt-repo.git   # this repo (needs read credentials if private)
     # git-sync v4 (chart >= 1.11) reads `ref`; the chart's default is "v2-2-stable",
     # so without it git-sync never syncs `deploy`. `branch` only feeds the v3 variable.
     ref: deploy             # build output only, written by the deploy CI job
@@ -35,7 +34,7 @@ dags:
     #   (chart files/pod-template-file.kubernetes-helm-yaml). One shallow clone
     #   of `deploy` at pod start, never updated, so a running task's files
     #   can't change or disappear under it. (With Celery/Local executors they
-    #   can: see strain/run.py --executor-model local.)
+    #   can; set GITSYNC_STALE_WORKTREE_TIMEOUT above your longest task.)
     # Every task pod clones the deploy branch, so keep it shallow (depth: 1) and
     # the deploy tree small. It holds only dags/, packages/ and projects/.
     env:
@@ -80,7 +79,7 @@ dagProcessor:
 webserver:
   resources:
     # Enough CPU that /health answers its liveness probe while task pods saturate
-    # the node; at 200m the e2e stress test saw the webserver restarted.
+    # the node.
     requests:
       cpu: 500m
       memory: 1Gi

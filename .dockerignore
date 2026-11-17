@@ -1,4 +1,0 @@
-# The e2e image (e2e/Dockerfile) only needs the pinned requirements.
-*
-!requirements/airflow-image.txt
-!requirements/dbt.txt
