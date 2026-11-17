@@ -9,10 +9,13 @@ runs out of CPU, misses heartbeats, and looks hung to the scheduler.
 ## Solution
 
 * CI finds the dbt projects (`dbt_bundle.yml`), runs `dbt deps` + `dbt parse`
-  per project and ships `target/manifest.json` with the DAGs (the *bundle*).
+  per project, and keeps only the generated files (the *overlay*):
+  `<project>/target/manifest.json`, `<project>/dbt_packages/`, and the registry
+  `dags/dbt_factory/projects.json`.
 * Cosmos reads the manifest in an explicit `LoadMode.DBT_MANIFEST` (no silent
   fallback to `dbt ls`), so DAG parsing runs no dbt at all.
-* The bundle is committed to the `deploy` branch, and git-sync delivers it to Airflow.
+* The `deploy` branch is the default branch's tree with the overlay on top, each
+  file in place next to its project. git-sync delivers it to Airflow.
 * Environment: Airflow 2.10.5, KubernetesExecutor, astronomer-cosmos 1.10.1,
   dbt 1.11 in its own venv on the image.
 
@@ -28,32 +31,42 @@ defaults to the values shown in it (`manifest/config.py`):
   dummy `profiles.yml` for CI only. `mapping` is the Cosmos profile mapping
   (class, `conn_id`, `profile_args`) the tasks use.
 * `parse_env`: values for `env_var()` calls during `dbt parse` in CI.
+* `dbt_packages`: `ship` (default) commits each project's `dbt_packages/`, built
+  in CI, so tasks run no `dbt deps`. `install` commits only the manifest and
+  Cosmos runs `dbt deps` in every task: that needs network to the package
+  sources, and can't work with `local:` packages (Cosmos runs each task in a
+  temp dir, where `../../packages/x` doesn't resolve), so the generator refuses it then.
 * `dags`: the DAG directory, the per-project DAG config path (`{name}`), and DAG defaults.
 
 ## Manifest generation (`manifest/`)
 
 ```
-python -m manifest.generate --out <bundle> [--source .] [--config dbt_bundle.yml] [--previous <old bundle>]
+python -m manifest.generate --out <overlay> [--source .] [--config dbt_bundle.yml] [--previous <deploy checkout>]
 python -m manifest.generate --list        # the projects found and their settings; runs no dbt
-python -m manifest.generate --out <bundle> --project <name>   # one project, for local use
+python -m manifest.generate --out <overlay> --project <name>   # one project, for local use
 ```
 
 * **No git.** A directory goes in and a directory comes out. `--previous` is a
   plain directory: in CI, a checkout of the `deploy` branch.
-* **Fails loudly on layout problems** instead of shipping a bundle without a project:
+* **dbt never runs in the source tree.** Each project, with the local packages
+  it uses at the same relative paths, is copied to a temp dir and parsed there.
+  `--out` receives only the generated files.
+* **Fails loudly on layout problems** instead of deploying without a project:
   two projects with the same `name:`, a project using another profile, a
   project without a DAG config (or a DAG config without a project), a local
   package outside the repo, a non-default `target-path` / `packages-install-path`.
 * **Only changed projects are re-parsed.** Each project has an *input hash*
   covering its files, the local packages it uses (`packages.yml` `local:`,
   followed transitively), `requirements/dbt.txt`, the CI profile, the parse env,
-  the generator itself, and the dbt version. If the previous bundle has the
-  same hash at the same path, that project is copied **byte for byte**. A fresh
+  the `dbt_packages` mode, the generator itself, and the dbt version. The hashes
+  are kept in the registry. If the previous deploy has the same hash at the same
+  path, that project's generated files are copied **byte for byte**. A fresh
   `dbt parse` is never byte-identical (`generated_at`), so this also keeps the
   deploy diff to what really changed.
-* **Bundle layout** mirrors the repo, so `local: ../../packages/...` resolves at
-  runtime. Only the local packages the projects use are copied. `dbt deps`
-  symlinks local packages, so the generator dereferences them.
+* **In place.** Generated files go next to their project, so the deploy commit
+  has the same layout as the source and `local: ../../packages/...` resolves at
+  runtime. `dbt deps` symlinks local packages; the shipped `dbt_packages/` has
+  them dereferenced.
 * **The registry.** The generator writes `<dags dir>/dbt_factory/projects.json`:
   every project's path and DAG config, the profile name, target and mapping, and
   the DAG defaults. The DAG factory and the CI checks read it instead of
@@ -85,11 +98,14 @@ python -m manifest.generate --out <bundle> --project <name>   # one project, for
 | job | runs on | does |
 |---|---|---|
 | `validate` | MRs, default branch, manual | generate vs. the current `deploy`, then `pytest` (ci/checks) |
-| `deploy` | default branch | commit the bundle from `validate` to `deploy` |
+| `deploy` | default branch | commit this commit's tree + the overlay from `validate` to `deploy` |
 
-The deploy push is a few plain lines in the YAML:
+`validate` builds the overlay, assembles the exact deploy tree
+(`git archive $CI_COMMIT_SHA` + the overlay) and runs the checks on it. The
+deploy push is a few plain lines in the YAML:
 1. Check out `deploy` into a worktree.
-2. Replace its contents with the bundle and `git add -A -f`.
+2. Replace its contents with `git archive $CI_COMMIT_SHA`, copy the overlay on
+   top, and `git add -A -f` (`-f`: `target/` and `dbt_packages/` are gitignored).
 3. Commit only if something changed (`[skip ci]`, with a `Source-Commit:` trailer).
 4. Do a plain push.
 
@@ -101,7 +117,10 @@ stops an older pipeline from deploying over a newer one. The push uses
 A rejected push (someone moved `deploy` meanwhile) just fails the job. The
 next pipeline rebuilds from the new state.
 
-### Checks (`ci/checks/`, run against the built bundle)
+A deploy commit's diff is the source change plus the manifests (and registry
+hashes) of the projects it touched.
+
+### Checks (`ci/checks/`, run against the assembled deploy tree)
 
 | test | guards against |
 |---|---|
@@ -117,4 +136,4 @@ next pipeline rebuilds from the new state.
 * KubernetesExecutor task pods clone once (init container, `GITSYNC_ONE_TIME`),
   so a running task's files never change. With Celery or Local executors, set
   `GITSYNC_STALE_WORKTREE_TIMEOUT` above your longest task.
-* Every task pod clones `deploy`: keep `depth: 1` and the bundle small.
+* Every task pod clones `deploy`: keep `depth: 1`.

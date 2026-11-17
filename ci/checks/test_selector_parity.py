@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -73,14 +72,12 @@ def cosmos_select(project_dir: Path, sel: Selection) -> set[str]:
 
 @pytest.mark.parametrize(("project", "spec"), list(_specs()))
 def test_manifest_selection_matches_dbt_ls(
-    bundle_dir: Path, parse_env: dict[str, str], dbt_bin: str, tmp_path: Path, project: str, spec: dict[str, Any]
+    bundle_dir: Path, dbt_tree: Path, parse_env: dict[str, str], dbt_bin: str, project: str, spec: dict[str, Any]
 ) -> None:
-    # Run dbt ls on a copy so it cannot rewrite the shipped target/ files.
-    work = tmp_path / "deploy"
-    shutil.copytree(bundle_dir, work, symlinks=False)
+    # dbt ls runs in the scratch copy so it cannot rewrite the deploy tree's target/ files.
     sel = Selection(project, list(spec.get("select", [])), list(spec.get("exclude", [])))
 
-    expected = dbt_ls(dbt_bin, project_path(work, project), sel, parse_env)
+    expected = dbt_ls(dbt_bin, project_path(dbt_tree, project), sel, parse_env)
     actual = cosmos_select(project_path(bundle_dir, project), sel)
 
     assert expected, f"{spec['dag_id']}: selector matches nothing in dbt"

@@ -20,7 +20,7 @@ dags:
     repo: https://gitlab.example.com/your-group/your-dbt-repo.git   # this repo (needs read credentials if private)
     # git-sync v4 (chart >= 1.11) reads `ref`; the chart's default is "v2-2-stable",
     # so without it git-sync never syncs `deploy`. `branch` only feeds the v3 variable.
-    ref: deploy             # build output only, written by the deploy CI job
+    ref: deploy             # written by the deploy CI job; never commit to it by hand
     branch: deploy
     depth: 1
     subPath: dags           # dags_folder = <repo>/dags; projects/ sits next to it
@@ -35,8 +35,9 @@ dags:
     #   of `deploy` at pod start, never updated, so a running task's files
     #   can't change or disappear under it. (With Celery/Local executors they
     #   can; set GITSYNC_STALE_WORKTREE_TIMEOUT above your longest task.)
-    # Every task pod clones the deploy branch, so keep it shallow (depth: 1) and
-    # the deploy tree small. It holds only dags/, packages/ and projects/.
+    # Every task pod clones the deploy branch, so keep it shallow (depth: 1).
+    # `deploy` = the default branch's tree + generated files in place
+    # (<project>/target/manifest.json, dbt_packages/, dags/dbt_factory/projects.json).
     env:
       # Keeps the sidecar's previous checkout briefly for a DAG-file parse that
       # is in flight during a swap. Tasks don't depend on it with this executor.

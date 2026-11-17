@@ -15,7 +15,6 @@ be checked this way.
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -24,12 +23,8 @@ from conftest import PROJECTS, dbt_profile_args, project_path
 
 
 @pytest.mark.parametrize("project", PROJECTS)
-def test_all_models_compile(
-    bundle_dir: Path, parse_env: dict[str, str], dbt_bin: str, tmp_path: Path, project: str
-) -> None:
-    work = tmp_path / "deploy"
-    shutil.copytree(bundle_dir, work, symlinks=False)
-    project_dir = project_path(work, project)
+def test_all_models_compile(dbt_tree: Path, parse_env: dict[str, str], dbt_bin: str, project: str) -> None:
+    project_dir = project_path(dbt_tree, project)
     r = subprocess.run(
         [
             dbt_bin,

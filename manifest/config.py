@@ -37,6 +37,11 @@ DEFAULTS: dict[str, Any] = {
     },
     # Env for `dbt parse` in CI: values for env_var() calls in the projects. Optional.
     "parse_env": "manifest/parse.env",
+    # What the deploy commit adds next to each project's target/manifest.json:
+    #   ship:    the project's dbt_packages/, built in CI; no `dbt deps` at runtime.
+    #   install: nothing; Cosmos runs `dbt deps` in every task (needs network to the
+    #            package sources; no `local:` packages, see discover()).
+    "dbt_packages": "ship",
     "dags": {
         "dir": "dags",
         "config": "dags/config/{name}.yml",
@@ -85,6 +90,10 @@ class Config:
         return self.source / value if value else None
 
     @property
+    def ship_dbt_packages(self) -> bool:
+        return bool(self.raw["dbt_packages"] == "ship")
+
+    @property
     def dags_dir(self) -> Path:
         """Relative to the source (and to the bundle root)."""
         return Path(self.raw["dags"]["dir"])
@@ -119,6 +128,8 @@ def load_config(source: Path, path: Path | None = None) -> Config:
     elif path != source / CONFIG_FILE:
         raise ConfigError(f"config file not found: {path}")
     merged = _merge(DEFAULTS, raw)
+    if merged["dbt_packages"] not in ("install", "ship"):
+        raise ConfigError(f"{CONFIG_FILE}: dbt_packages must be 'install' or 'ship', not {merged['dbt_packages']!r}")
     if "{name}" not in merged["dags"]["config"]:
         raise ConfigError(f"{CONFIG_FILE}: dags.config must contain {{name}}")
     return Config(source=source.resolve(), raw=merged)
@@ -188,6 +199,18 @@ def discover(config: Config, skip: list[Path] | None = None) -> list[Project]:
         if len(paths) > 1:
             errors.append(f"project name {name!r} is used by {', '.join(map(str, paths))}")
     projects = [Project(name=n, path=ps[0], packages=packages[source / ps[0]]) for n, ps in by_name.items()]
+
+    if not config.ship_dbt_packages:
+        for p in projects:
+            if p.packages:
+                errors.append(
+                    f"{p.path}: uses local package(s) {', '.join(x.as_posix() for x in p.packages)}. With "
+                    "`dbt_packages: install`, Cosmos runs `dbt deps` in a temp dir where relative `local:` "
+                    "paths don't resolve; set `dbt_packages: ship`"
+                )
+    factory = source / config.dags_dir / "dbt_factory" / "__init__.py"
+    if not factory.is_file():
+        errors.append(f"{factory.relative_to(source)}: missing; the DAG factory must be in the DAG dir")
 
     names = {p.name for p in projects}
     for p in projects:

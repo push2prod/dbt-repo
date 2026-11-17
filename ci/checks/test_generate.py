@@ -2,9 +2,10 @@
 
 * Discovery and layout validation (no dbt): the errors a broken layout must
   raise instead of silently shipping a bundle without some project.
-* Reuse (runs dbt): only the projects whose inputs changed are re-parsed.
+* The overlay (runs dbt): only generated files, each in place; only the
+  projects whose inputs changed are re-parsed.
 
-Independent of the bundle under test (BUNDLE_DIR).
+Independent of the deploy tree under test (BUNDLE_DIR).
 """
 
 from __future__ import annotations
@@ -67,7 +68,8 @@ def dag_files(name: str) -> dict[str, str]:
 def repo(tmp_path: Path, projects: dict[str, dict[str, str]], extra: dict[str, str] | None = None) -> Path:
     """A source dir: ``projects`` maps a project path to its files."""
     src = tmp_path / "src"
-    files = {"profiles/profiles.yml": PROFILES, **(extra or {})}
+    factory = (REPO / "dags/dbt_factory/__init__.py").read_text()
+    files = {"profiles/profiles.yml": PROFILES, "dags/dbt_factory/__init__.py": factory, **(extra or {})}
     for path, pfiles in projects.items():
         files.update({f"{path}/{k}": v for k, v in pfiles.items()})
         name = next(line.split(":", 1)[1].strip() for line in pfiles["dbt_project.yml"].splitlines())
@@ -91,7 +93,7 @@ def test_nested_layout_named_by_dbt_project(tmp_path: Path) -> None:
         {"teams/x/core_dir": project("x_core", ["../../../shared/macros"]), "teams/y/sales": project("y_sales")},
         {
             "shared/macros/dbt_project.yml": "name: macros\nversion: '1.0'\nprofile: other\n",
-            "dbt_bundle.yml": "projects:\n  include: ['**']\n",
+            "dbt_bundle.yml": "projects:\n  include: ['**']\ndbt_packages: ship\n",
         },
     )
     found = discover(load_config(src))
@@ -121,8 +123,13 @@ def test_build_output_and_installed_packages_are_skipped(tmp_path: Path) -> None
         ({"projects/a": project("a", extra="target-path: out\n")}, {}, "target-path"),
         ({"projects/a": project("a", ["../../../elsewhere"])}, {}, "outside the source dir"),
         ({"projects/a": project("a")}, {"dags/config/gone.yml": "dags: []\n"}, "no project has that name"),
+        (
+            {"projects/a": project("a", ["../../packages/p"])},
+            {"packages/p/dbt_project.yml": "name: p\n", "dbt_bundle.yml": "dbt_packages: install\n"},
+            "set `dbt_packages: ship`",
+        ),
     ],
-    ids=["duplicate-name", "other-profile", "target-path", "package-outside", "orphan-dag-config"],
+    ids=["duplicate-name", "other-profile", "target-path", "package-outside", "orphan-dag-config", "local-pkg-install"],
 )
 def test_layout_errors(tmp_path: Path, projects: dict[str, dict[str, str]], extra: dict[str, str], error: str) -> None:
     src = repo(tmp_path, projects, extra)
@@ -157,23 +164,51 @@ def generate(src: Path, out: Path, previous: Path | None = None) -> dict[str, st
     return result
 
 
+def files_in(root: Path) -> list[str]:
+    return sorted(p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file())
+
+
+def test_install_mode_overlay_is_only_manifests(tmp_path: Path) -> None:
+    src = repo(tmp_path, {"projects/a": project("a"), "teams/t/b": project("b")})
+    (src / "dbt_bundle.yml").write_text("projects:\n  include: ['projects/*', 'teams/*/*']\ndbt_packages: install\n")
+    out = tmp_path / "overlay"
+    assert generate(src, out) == {"a": "built", "b": "built"}
+    assert files_in(out) == [
+        "dags/dbt_factory/projects.json",
+        "projects/a/target/manifest.json",
+        "teams/t/b/target/manifest.json",
+    ]
+    reg = json.loads((out / "dags/dbt_factory/projects.json").read_text())
+    assert reg["dbt_packages"] == "install"
+    assert {n: e["path"] for n, e in reg["projects"].items()} == {"a": "projects/a", "b": "teams/t/b"}
+    assert not (src / "projects/a/target").exists(), "dbt must not run in the source tree"
+
+
 def test_only_changed_projects_are_reparsed(tmp_path: Path) -> None:
     src = repo(
         tmp_path,
         {"projects/a": project("a", ["../../packages/shared"]), "projects/b": project("b")},
-        {"packages/shared/dbt_project.yml": "name: shared\nversion: '1.0'\n", "packages/shared/macros/m.sql": "{% macro m() %}1{% endmacro %}\n"},
+        {
+            "packages/shared/dbt_project.yml": "name: shared\nversion: '1.0'\n",
+            "packages/shared/macros/m.sql": "{% macro m() %}1{% endmacro %}\n",
+        },
     )
     v1 = tmp_path / "v1"
     assert generate(src, v1) == {"a": "built", "b": "built"}
 
-    # The bundle mirrors the source and carries the registry.
+    # ship mode (the default): dbt_packages/ (dereferenced) next to target/, nothing else from the source.
     reg = json.loads((v1 / "dags/dbt_factory/projects.json").read_text())
-    assert reg["projects"] == {
-        "a": {"path": "projects/a", "dag_config": "dags/config/a.yml"},
-        "b": {"path": "projects/b", "dag_config": "dags/config/b.yml"},
+    assert {n: (e["path"], e["dag_config"]) for n, e in reg["projects"].items()} == {
+        "a": ("projects/a", "dags/config/a.yml"),
+        "b": ("projects/b", "dags/config/b.yml"),
     }
-    assert (v1 / "packages/shared/macros/m.sql").is_file()
-    assert sorted(p.name for p in (v1 / "projects/a/target").iterdir()) == ["build-info.json", "manifest.json"]
+    assert "projects/a/dbt_packages/shared/macros/m.sql" in files_in(v1)
+    assert not (v1 / "projects/a/dbt_packages/shared").is_symlink()
+    assert {f for f in files_in(v1) if "dbt_packages" not in f} == {
+        "dags/dbt_factory/projects.json",
+        "projects/a/target/manifest.json",
+        "projects/b/target/manifest.json",
+    }
 
     cases = [
         ("nothing", lambda: None, {"a": "reused", "b": "reused"}),
@@ -186,5 +221,8 @@ def test_only_changed_projects_are_reparsed(tmp_path: Path) -> None:
         change()
         out = tmp_path / f"v{i + 2}"
         assert generate(src, out, previous) == expected, what
+        if what == "nothing":
+            # Reused files are byte-identical, so they stay out of the deploy diff.
+            assert (out / "projects/a/target/manifest.json").read_bytes() == (v1 / "projects/a/target/manifest.json").read_bytes()
+            assert "projects/a/dbt_packages/shared/macros/m.sql" in files_in(out)
         previous = out
-    shutil.rmtree(tmp_path / "v1")

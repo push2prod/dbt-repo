@@ -1,8 +1,9 @@
 # dbt-repo
 
 dbt projects for **Cosmos** on **Airflow 2.10** (KubernetesExecutor, git-sync).
-GitLab CI runs `dbt deps` + `dbt parse` for every changed project and ships
-each `manifest.json` with the DAGs, so the DAG processor never runs dbt.
+GitLab CI runs `dbt deps` + `dbt parse` for every changed project and commits
+the result to the `deploy` branch: the default branch's tree plus, next to each
+project, `target/manifest.json` and `dbt_packages/`. The DAG processor never runs dbt.
 
 Design and rationale: [docs/ci-cd.md](docs/ci-cd.md).
 
@@ -16,9 +17,9 @@ profiles/profiles.yml  dummy profile for CI parsing only; not deployed
 dags/
   dbt_<name>.py        one DAG file per project (see "Add a project")
   config/<name>.yml    that project's DAGs: dag_id, schedule, select, exclude
-  dbt_factory/         Cosmos DAG factory (tooling, added to every bundle)
+  dbt_factory/         Cosmos DAG factory; reads projects.json (generated, only on `deploy`)
 manifest/              generate.py · config.py · files.py · dbtvenv.py · parse.env
-ci/checks/             pytest checks on a built bundle, and on the generator
+ci/checks/             pytest checks on the assembled deploy tree, and on the generator
 deploy/airflow/        production Helm values + reference Dockerfile for the Airflow image
 requirements/          dbt.txt (own venv) · airflow-image.txt · airflow.txt
 .gitlab-ci.yml         validate + deploy
@@ -48,26 +49,28 @@ export DBT_BIN=/opt/dbt-venv/bin/dbt DBT_EXECUTABLE=/opt/dbt-venv/bin/dbt
 export AIRFLOW_HOME=$(mktemp -d) PYTHONDONTWRITEBYTECODE=1
 ```
 
-**Generate a bundle** (no warehouse needed; `dbt parse` doesn't connect):
+**Generate the overlay** (only generated files; no warehouse needed, `dbt parse` doesn't connect):
 ```bash
-python -m manifest.generate --list                                       # projects found; no dbt
-python -m manifest.generate --out build/bundle
-python -m manifest.generate --out build/bundle2 --previous build/bundle  # reuses unchanged projects
-python -m manifest.generate --out build/one --project core               # one project
+python -m manifest.generate --list                                          # projects found; no dbt
+python -m manifest.generate --out build/overlay
+python -m manifest.generate --out build/overlay2 --previous build/overlay   # reuses unchanged projects
+python -m manifest.generate --out build/one --project core                  # one project
 ```
-It prints `built` / `reused` per project. `build/bundle.summary.json` holds the same.
+It prints `built` / `reused` per project. `build/overlay.summary.json` holds the same.
 
-**Validate the bundle:**
+**Validate it** the way CI does, on this commit's tree + the overlay:
 ```bash
-BUNDLE_DIR=build/bundle pytest
+mkdir -p build/deploy-tree && git archive HEAD | tar -x -C build/deploy-tree
+cp -a build/overlay/. build/deploy-tree/
+BUNDLE_DIR=build/deploy-tree SUMMARY_FILE=build/overlay.summary.json pytest
 ```
 
 ## CI (`.gitlab-ci.yml`)
 
 | job | runs on | does |
 |---|---|---|
-| `validate` | MRs, default branch, manual | generate vs. the current `deploy` branch, then `pytest` |
-| `deploy` | default branch | commit the bundle to the `deploy` branch (git-sync tracks it) |
+| `validate` | MRs, default branch, manual | generate the overlay (reusing `deploy`), assemble the deploy tree, `pytest` |
+| `deploy` | default branch | commit this commit's tree + the overlay to `deploy` (git-sync tracks it) |
 
 Project setup:
 * CI/CD variable `DEPLOY_PUSH_TOKEN` (masked, protected): project access token with `write_repository`.

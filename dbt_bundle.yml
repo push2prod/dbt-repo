@@ -28,6 +28,12 @@ profile:
 # Env for `dbt parse` in CI: values for env_var() calls in the projects. Optional.
 parse_env: manifest/parse.env
 
+# The deploy commit is this repo's tree plus, next to each project's dbt_project.yml:
+#   target/manifest.json, and with `ship` also dbt_packages/ (built in CI, so tasks
+#   run no `dbt deps`). `install` ships only the manifest and Cosmos runs `dbt deps`
+#   in every task: needs network to the package sources and no `local:` packages.
+dbt_packages: ship
+
 dags:
   dir: dags                        # DAG files; deployed as-is, plus dags/dbt_factory
   config: "dags/config/{name}.yml" # one per project; must exist for every project

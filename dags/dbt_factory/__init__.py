@@ -1,4 +1,7 @@
-"""Build Cosmos DAGs from the bundle registry (projects.json, written by manifest.generate).
+"""Build Cosmos DAGs from the registry (projects.json, written by manifest.generate).
+
+The deploy branch is the source tree plus the generated files, each in place:
+<project>/target/manifest.json and this directory's projects.json.
 
 Parse-time cost: one small JSON read, then one YAML read plus one
 manifest.json read per project. No dbt subprocess runs at parse time.
@@ -7,7 +10,7 @@ manifest.json read per project. No dbt subprocess runs at parse time.
   missing manifest silently falls back to ``DBT_LS``: a `dbt ls` subprocess
   on every parse, which is the problem this repo exists to remove. Explicit
   mode makes a missing manifest show up as a DAG import error.
-* Every path comes from projects.json, relative to the bundle root, so the
+* Every path comes from projects.json, relative to the repo root, so the
   factory assumes no repo layout. ``resolve()`` follows git-sync's symlink to
   the concrete revision directory. One parse therefore reads DAG code, project
   and manifest from the same deploy commit, even if git-sync swaps the symlink
@@ -44,7 +47,7 @@ def registry() -> dict[str, Any]:
 
 
 def bundle_root() -> Path:
-    """The bundle root: dags_dir in the registry is relative to it."""
+    """The repo root of the deploy checkout: dags_dir in the registry is relative to it."""
     return FACTORY_DIR.parents[len(Path(registry()["dags_dir"]).parts)]
 
 
@@ -90,8 +93,9 @@ def build_dags(project: str, namespace: dict[str, Any]) -> None:
         dbt_project_path=project_dir,
         manifest_path=project_dir / "target" / "manifest.json",
         project_name=project,
-        # dbt_packages/ ships in the deploy tree, built by CI with the pinned dbt.
-        install_dbt_deps=False,
+        # `dbt_packages: ship`: dbt_packages/ is in the deploy commit, built by CI.
+        # `install`: Cosmos runs `dbt deps` in each task's temp dir.
+        install_dbt_deps=registry()["dbt_packages"] != "ship",
         # CI does not ship partial_parse.msgpack (its profile is a dummy, not the runtime mapping).
         partial_parse=False,
     )
