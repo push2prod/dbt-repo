@@ -39,8 +39,8 @@ validate:
     - python -m venv /opt/dbt-venv && /opt/dbt-venv/bin/pip install -q -r requirements/dbt.txt
     - pip install -q -r requirements/airflow.txt -c "$AIRFLOW_CONSTRAINTS"
   script:
-    # `manifest.generate` runs `dbt deps` + `dbt parse` per changed project and
-    # writes target/manifest.json + partial_parse.msgpack into the bundle.
+    # `manifest.generate` finds the projects (dbt_bundle.yml), runs `dbt deps` +
+    # `dbt parse` per changed project, and writes target/manifest.json into the bundle.
     - mkdir -p build/previous
     - if git fetch -q --depth 1 origin deploy; then git archive FETCH_HEAD | tar -x -C build/previous; fi
     - python -m manifest.generate --source "$DBT_SOURCE" --out build/bundle --previous build/previous

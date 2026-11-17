@@ -1,7 +1,6 @@
 # Single source of truth for dbt versions. Installed into its OWN venv, both in
 # CI and on the Airflow image (/opt/dbt-venv), separate from Airflow's env.
-# partial_parse.msgpack and the manifest schema are tied to the dbt-core
-# version; a mismatch means a full re-parse (or a broken manifest).
+# The manifest schema is tied to the dbt-core version; a mismatch can break it.
 dbt-core==1.11.17
 dbt-postgres==1.11.0
 dbt-adapters==1.24.5

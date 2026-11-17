@@ -1,0 +1,17 @@
+# Dummy profile for CI only: `dbt parse`, `dbt ls` and `dbt compile` don't
+# connect to the warehouse. Airflow tasks don't use this file: Cosmos builds the
+# profile from the Airflow connection in dbt_bundle.yml (profile.mapping).
+# The profile name and target must match dbt_bundle.yml (profile.name / target),
+# and `type` must be the adapter in requirements/dbt.txt.
+dbt:
+  target: prod
+  outputs:
+    prod:
+      type: postgres
+      host: ci-dummy
+      port: 5432
+      user: ci-dummy
+      password: ci-dummy
+      dbname: ci-dummy
+      schema: ci-dummy
+      threads: 1

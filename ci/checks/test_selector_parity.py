@@ -22,7 +22,7 @@ from typing import Any
 
 import pytest
 from _pytest.mark.structures import ParameterSet
-from conftest import BUNDLE, PROJECTS, load_dag_specs
+from conftest import DAGS_DIR, PROJECTS, dbt_profile_args, load_dag_specs, project_path
 
 # Resource types that become Airflow tasks. Tests are attached by Cosmos'
 # test_behavior and compared separately by dbt's indirect selection rules, so
@@ -38,15 +38,14 @@ class Selection:
 
 
 def _specs() -> Iterator[ParameterSet]:
-    dag_specs = load_dag_specs(BUNDLE / "dags")
+    dag_specs = load_dag_specs(DAGS_DIR)
     for project in PROJECTS:
         for spec in dag_specs(project):
             yield pytest.param(project, spec, id=spec["dag_id"])
 
 
 def dbt_ls(dbt_bin: str, project_dir: Path, sel: Selection, env: dict[str, str]) -> set[str]:
-    cmd = [dbt_bin, "ls", "--project-dir", str(project_dir), "--profiles-dir", str(project_dir)]
-    cmd += ["--profile", sel.project, "--target", "prod", "--quiet", "--no-use-colors"]
+    cmd = [dbt_bin, "ls", "--project-dir", str(project_dir), *dbt_profile_args(), "--quiet", "--no-use-colors"]
     cmd += ["--output", "json", "--output-keys", "unique_id", "resource_type"]
     if sel.select:
         cmd += ["--select", *sel.select]
@@ -81,8 +80,8 @@ def test_manifest_selection_matches_dbt_ls(
     shutil.copytree(bundle_dir, work, symlinks=False)
     sel = Selection(project, list(spec.get("select", [])), list(spec.get("exclude", [])))
 
-    expected = dbt_ls(dbt_bin, work / "projects" / project, sel, parse_env)
-    actual = cosmos_select(bundle_dir / "projects" / project, sel)
+    expected = dbt_ls(dbt_bin, project_path(work, project), sel, parse_env)
+    actual = cosmos_select(project_path(bundle_dir, project), sel)
 
     assert expected, f"{spec['dag_id']}: selector matches nothing in dbt"
     assert actual == expected, (

@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
 
 import pytest
-from conftest import load_dag_specs, projects
+from conftest import DAGS_DIR, PROJECTS, load_dag_specs
 
 if TYPE_CHECKING:
     from airflow.models.dagbag import DagBag
@@ -46,18 +46,20 @@ def dagbag(bundle_dir: Path, monkeypatch_module: pytest.MonkeyPatch) -> DagBag:
     for name in ("Popen", "run", "call", "check_call", "check_output"):
         monkeypatch_module.setattr(subprocess, name, forbidden)
 
-    sys.path.insert(0, str(bundle_dir / "dags"))
-    return DagBag(dag_folder=str(bundle_dir / "dags"), include_examples=False, safe_mode=True)
+    sys.path.insert(0, str(DAGS_DIR))
+    return DagBag(dag_folder=str(DAGS_DIR), include_examples=False, safe_mode=True)
 
 
 def test_no_import_errors(dagbag: DagBag) -> None:
     assert dagbag.import_errors == {}, "\n\n".join(f"{k}:\n{v}" for k, v in dagbag.import_errors.items())
 
 
-def test_expected_dags_present(dagbag: DagBag, bundle_dir: Path) -> None:
-    dag_specs = load_dag_specs(bundle_dir / "dags")
-    expected = {s["dag_id"] for p in projects(bundle_dir) for s in dag_specs(p)}
-    assert expected <= set(dagbag.dag_ids)
+def test_expected_dags_present(dagbag: DagBag) -> None:
+    # A project whose DAG file is missing (no build_dags("<name>") call) fails here.
+    dag_specs = load_dag_specs(DAGS_DIR)
+    expected = {s["dag_id"] for p in PROJECTS for s in dag_specs(p)}
+    missing = expected - set(dagbag.dag_ids)
+    assert not missing, f"DAGs in the DAG configs but not created by any DAG file: {sorted(missing)}"
 
 
 def test_parse_time_budget(dagbag: DagBag) -> None:

@@ -1,4 +1,4 @@
 # Installed into the Airflow image (on top of apache/airflow:2.10.5), with Airflow's
-# constraints. astronomer-cosmos 1.16+ needs Airflow >= 2.11.
+# constraints. Must match the Airflow image: the CI checks import DAGs with these.
 apache-airflow==2.10.5
-astronomer-cosmos==1.15.1
+astronomer-cosmos==1.10.1

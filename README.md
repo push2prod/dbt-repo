@@ -2,35 +2,39 @@
 
 dbt projects for **Cosmos** on **Airflow 2.10** (KubernetesExecutor, git-sync).
 GitLab CI runs `dbt deps` + `dbt parse` for every changed project and ships
-`manifest.json` and `partial_parse.msgpack` with the DAGs, so the DAG processor
-never runs dbt.
+each `manifest.json` with the DAGs, so the DAG processor never runs dbt.
 
 Design and rationale: [docs/ci-cd.md](docs/ci-cd.md).
 
 ## Layout
 
 ```
-projects/<name>/       dbt project: dbt_project.yml, profiles.yml, packages.yml, models/ ...
+dbt_bundle.yml         where the projects are, the shared profile, DAG settings (all optional)
+projects/<dir>/        dbt projects (default glob `projects/*`; any layout via projects.include)
 packages/<pkg>/        local dbt packages (optional), used as `local: ../../packages/<pkg>`
+profiles/profiles.yml  dummy profile for CI parsing only; not deployed
 dags/
   dbt_<name>.py        one DAG file per project (see "Add a project")
   config/<name>.yml    that project's DAGs: dag_id, schedule, select, exclude
   dbt_factory/         Cosmos DAG factory (tooling, added to every bundle)
-manifest/              generate.py · files.py · dbtvenv.py · parse.env
-ci/checks/             pytest checks on a built bundle
+manifest/              generate.py · config.py · files.py · dbtvenv.py · parse.env
+ci/checks/             pytest checks on a built bundle, and on the generator
 deploy/airflow/        production Helm values + reference Dockerfile for the Airflow image
 requirements/          dbt.txt (own venv) · airflow-image.txt · airflow.txt
 .gitlab-ci.yml         validate + deploy
 ```
 
-Rules the factory and generator rely on:
+Rules the generator enforces (it fails the pipeline otherwise):
 
-* Each project's **profile name equals its folder name**, its target is **`prod`**,
-  and `profiles.yml` lives **inside the project** (dbt runs with `--profiles-dir <project>`).
-* `manifest/parse.env` holds **production's** non-secret connection values and
-  every `env_var()` the projects read. Secrets use the `DBT_ENV_SECRET_` prefix
-  and can be dummies. Otherwise dbt discards the shipped partial parse at runtime.
-* The dbt venv on the Airflow image is installed from `requirements/dbt.txt`.
+* A project is named by **`name:` in its `dbt_project.yml`**; names are unique.
+  DAG files and DAG configs use that name, not the folder name.
+* Every project has a DAG config, and every DAG config has a project.
+* Projects use the **one profile** in `dbt_bundle.yml` (or set no `profile:`).
+  At runtime Cosmos builds it from the Airflow connection in `profile.mapping`.
+* Local packages live inside the repo. `target-path` and `packages-install-path`
+  stay at their defaults (Cosmos expects `target/`).
+
+`python -m manifest.generate --list` shows what it finds, without running dbt.
 
 ## Run locally
 
@@ -46,8 +50,10 @@ export AIRFLOW_HOME=$(mktemp -d) PYTHONDONTWRITEBYTECODE=1
 
 **Generate a bundle** (no warehouse needed; `dbt parse` doesn't connect):
 ```bash
-python -m manifest.generate --source . --out build/bundle
-python -m manifest.generate --source . --out build/bundle2 --previous build/bundle   # reuses unchanged projects
+python -m manifest.generate --list                                       # projects found; no dbt
+python -m manifest.generate --out build/bundle
+python -m manifest.generate --out build/bundle2 --previous build/bundle  # reuses unchanged projects
+python -m manifest.generate --out build/one --project core               # one project
 ```
 It prints `built` / `reused` per project. `build/bundle.summary.json` holds the same.
 
@@ -71,9 +77,10 @@ Project setup:
 
 * **Add a DAG:** add an entry to `dags/config/<project>.yml`
   (`dag_id`, `schedule`, `select`, `exclude`, optional `retries`).
-* **Add a project:** add `projects/<name>/` (`dbt_project.yml`, `profiles.yml`,
-  `packages.yml`, `package-lock.yml`), `dags/config/<name>.yml`, and
-  `dags/dbt_<name>.py`:
+* **Add a project:** add its directory where `projects.include` finds it
+  (`dbt_project.yml`, `packages.yml`, `package-lock.yml`; no `profiles.yml`
+  needed), `dags/config/<name>.yml`, and `dags/dbt_<name>.py`, where `<name>`
+  is the project's dbt `name:`:
   ```python
   # Airflow DAG file: Cosmos DAGs for the "<name>" dbt project.
   from dbt_factory import build_dags

@@ -11,8 +11,9 @@ from pathlib import Path
 
 # Point DBT_BIN at the dbt venv's dbt (CI and the image use /opt/dbt-venv).
 DBT_BIN = os.environ.get("DBT_BIN") or shutil.which("dbt") or "dbt"
-TARGET = "prod"  # must equal ProfileConfig.target_name in dags/dbt_factory
-KEEP_TARGET_FILES = {"manifest.json", "partial_parse.msgpack"}
+# Only the manifest ships. partial_parse.msgpack is dropped: it is reused at runtime
+# only if the runtime profile (Cosmos profile_mapping) hashes the same as the CI one.
+KEEP_TARGET_FILES = {"manifest.json"}
 
 
 def installed_versions() -> dict[str, str]:
@@ -42,26 +43,25 @@ def check_pins(requirements: Path) -> str:
     return have["dbt-core"]
 
 
-def deps_and_parse(project: Path, env: dict[str, str]) -> None:
+def deps_and_parse(project: Path, env: dict[str, str], profiles_dir: Path, profile: str, target: str) -> None:
     """`dbt deps` + `dbt parse` in ``project``, leaving only the artifacts Airflow needs in target/.
 
-    Same --profile/--target flags Cosmos passes at task time: dbt stores them in
-    the partial-parse state, so any difference makes the shipped msgpack useless.
+    Parses with the same --profile/--target that Cosmos passes at task time.
     """
-    common = ["--project-dir", str(project), "--profiles-dir", str(project), "--no-use-colors"]
+    common = ["--project-dir", str(project), "--profiles-dir", str(profiles_dir), "--no-use-colors"]
     run_env = {**os.environ, **env, "DBT_SEND_ANONYMOUS_USAGE_STATS": "false"}
-    for cmd in (["deps"], ["parse", "--profile", project.name, "--target", TARGET]):
+    for cmd in (["deps"], ["parse", "--profile", profile, "--target", target]):
         r = subprocess.run([DBT_BIN, *cmd, *common], env=run_env, capture_output=True, text=True, check=False)
         if r.returncode:
             sys.exit(f"[manifest] {project.name}: dbt {cmd[0]} failed\n{r.stdout}\n{r.stderr}")
     shutil.rmtree(project / "logs", ignore_errors=True)
-    target = project / "target"
-    for p in target.iterdir():
+    target_dir = project / "target"
+    for p in target_dir.iterdir():
         if p.name not in KEEP_TARGET_FILES:
             if p.is_dir():
                 shutil.rmtree(p)
             else:
                 p.unlink()
-    missing = KEEP_TARGET_FILES - {p.name for p in target.iterdir()}
+    missing = KEEP_TARGET_FILES - {p.name for p in target_dir.iterdir()}
     if missing:
         sys.exit(f"[manifest] {project.name}: dbt parse did not produce {sorted(missing)}")

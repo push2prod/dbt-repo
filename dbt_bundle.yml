@@ -1,0 +1,40 @@
+# Layout of this repo for manifest.generate (and, through the bundle's
+# projects.json, for the Airflow DAG factory and the CI checks).
+# Every path is relative to the repo root. Every key is optional; the values
+# below are the defaults (manifest/config.py).
+
+projects:
+  # Directories holding a dbt_project.yml. "**" is allowed, e.g. "teams/**".
+  # A project is named by `name:` in its dbt_project.yml, which must be unique.
+  # Local packages (packages.yml `local:`) are never projects, even if matched.
+  include: ["projects/*"]
+  exclude: []
+
+profile:
+  # One profile for every project. Projects that set `profile:` in
+  # dbt_project.yml must use this name.
+  name: dbt
+  target: prod
+  # Dummy profiles.yml for `dbt parse` / `dbt ls` / `dbt compile` in CI. Not deployed.
+  ci_profiles_dir: profiles
+  # What Airflow tasks use: Cosmos builds the profile from this Airflow connection.
+  mapping:
+    class: cosmos.profiles.PostgresUserPasswordProfileMapping
+    conn_id: dbt_warehouse
+    # Extra profile fields. For postgres, `schema` is required: the Airflow
+    # connection has no field for it, e.g. profile_args: {schema: analytics}
+    profile_args: {}
+
+# Env for `dbt parse` in CI: values for env_var() calls in the projects. Optional.
+parse_env: manifest/parse.env
+
+dags:
+  dir: dags                        # DAG files; deployed as-is, plus dags/dbt_factory
+  config: "dags/config/{name}.yml" # one per project; must exist for every project
+  defaults:                        # per-DAG defaults; a DAG config's `defaults:` overrides them
+    start_date: "2024-01-01"
+    catchup: false
+    max_active_runs: 1
+    tags: [dbt]
+    retries: 1
+    retry_delay_seconds: 60

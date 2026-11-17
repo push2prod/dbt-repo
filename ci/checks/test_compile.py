@@ -7,7 +7,7 @@ package prefix (`cents_to_dollars(...)` instead of
 with every DAG parsing fine and every task failing.
 
 `--no-introspect --no-populate-cache` keeps dbt off the warehouse, so this
-runs in CI with the same dummy-secret parse env. Models that need
+runs in CI with the same dummy CI profile. Models that need
 introspective queries (run_query, adapter.get_columns_in_relation, ...) can't
 be checked this way.
 """
@@ -20,7 +20,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import PROJECTS
+from conftest import PROJECTS, dbt_profile_args, project_path
 
 
 @pytest.mark.parametrize("project", PROJECTS)
@@ -29,7 +29,7 @@ def test_all_models_compile(
 ) -> None:
     work = tmp_path / "deploy"
     shutil.copytree(bundle_dir, work, symlinks=False)
-    project_dir = work / "projects" / project
+    project_dir = project_path(work, project)
     r = subprocess.run(
         [
             dbt_bin,
@@ -38,12 +38,7 @@ def test_all_models_compile(
             "--no-populate-cache",
             "--project-dir",
             str(project_dir),
-            "--profiles-dir",
-            str(project_dir),
-            "--profile",
-            project,
-            "--target",
-            "prod",
+            *dbt_profile_args(),
             "--no-use-colors",
         ],
         env={**os.environ, **parse_env},
