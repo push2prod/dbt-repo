@@ -146,7 +146,9 @@ python -m infra.manifest.generate --out <overlay> --project <name>   # one proje
 `validate` extracts the current `deploy` tree (`infra/scripts/fetch_previous.sh`),
 builds the overlay against it, assembles the exact deploy tree
 (`infra/scripts/assemble_deploy_tree.sh`: `git archive $CI_COMMIT_SHA` + the
-overlay) and runs the checks on it. `deploy` runs `infra/scripts/publish_deploy.sh`:
+overlay) and runs the checks on it. `deploy` runs `infra/scripts/publish_deploy.sh`.
+CI calls every script as `bash infra/scripts/<script>.sh`, so a checkout that
+drops the exec bit (or a `noexec` build dir) doesn't break the jobs. The deploy script:
 1. Skip if the default branch has moved on since this pipeline's commit (a newer
    pipeline deploys; also covered by "Prevent outdated deployment jobs").
 2. Note the current `deploy` SHA (`git ls-remote`): the lease.

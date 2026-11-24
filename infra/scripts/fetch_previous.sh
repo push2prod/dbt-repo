@@ -2,7 +2,7 @@
 # Extract the current `deploy` tree (if the branch exists) into <dir>, as the
 # generator's --previous: unchanged projects are copied from it byte for byte.
 #
-#   infra/scripts/fetch_previous.sh <dir>
+#   bash infra/scripts/fetch_previous.sh <dir>
 set -euo pipefail
 
 dir=$1

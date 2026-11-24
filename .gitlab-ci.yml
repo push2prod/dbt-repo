@@ -4,7 +4,8 @@
 # place (the "overlay": <project>/target/manifest.json, dbt_packages/,
 # utils/dbt_factory/projects.json). All tooling is under infra/: config
 # infra/dbt_bundle.yml, generator infra/manifest, checks infra/checks, and the
-# shell steps in infra/scripts (this file only calls them).
+# shell steps in infra/scripts (this file only calls them, as `bash <script>`, so
+# they don't depend on the files' exec bit surviving the checkout).
 #
 # Project setup:
 #   * CI/CD variable DEPLOY_PUSH_TOKEN (masked, protected): a project access token
@@ -51,10 +52,10 @@ validate:
     # `infra.manifest.generate` finds the projects (infra/dbt_bundle.yml), runs
     # `dbt deps` + `dbt parse` for each changed one in a temp copy, and writes only
     # the generated files to build/overlay. Unchanged projects are copied from `deploy`.
-    - infra/scripts/fetch_previous.sh build/previous
+    - bash infra/scripts/fetch_previous.sh build/previous
     - python -m infra.manifest.generate --source . --out build/overlay --previous build/previous
     # Validate exactly what `deploy` will commit: this commit's tree + the overlay.
-    - infra/scripts/assemble_deploy_tree.sh "$CI_COMMIT_SHA" build/overlay build/deploy-tree
+    - bash infra/scripts/assemble_deploy_tree.sh "$CI_COMMIT_SHA" build/overlay build/deploy-tree
     - BUNDLE_DIR=build/deploy-tree SUMMARY_FILE=build/overlay.summary.json AIRFLOW_HOME=$(mktemp -d) pytest -c infra/checks/pytest.ini
   artifacts:
     paths: [build/overlay, build/overlay.summary.json]
@@ -74,4 +75,4 @@ deploy:
     # `deploy` = this commit + one commit adding the generated files, force-pushed
     # with a lease. Skips if the default branch moved on, or if `deploy` already
     # holds exactly this commit + these files.
-    - DEPLOY_GIT_NAME=gitlab-ci DEPLOY_GIT_EMAIL="gitlab-ci@${CI_SERVER_HOST}" infra/scripts/publish_deploy.sh "$CI_COMMIT_SHA" "$CI_DEFAULT_BRANCH" build/overlay
+    - DEPLOY_GIT_NAME=gitlab-ci DEPLOY_GIT_EMAIL="gitlab-ci@${CI_SERVER_HOST}" bash infra/scripts/publish_deploy.sh "$CI_COMMIT_SHA" "$CI_DEFAULT_BRANCH" build/overlay

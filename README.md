@@ -65,7 +65,7 @@ It prints `built` / `reused` per project. `build/overlay.summary.json` holds the
 
 **Validate it** the way CI does, on this commit's tree + the overlay:
 ```bash
-infra/scripts/assemble_deploy_tree.sh HEAD build/overlay build/deploy-tree
+bash infra/scripts/assemble_deploy_tree.sh HEAD build/overlay build/deploy-tree
 BUNDLE_DIR=build/deploy-tree SUMMARY_FILE=build/overlay.summary.json pytest -c infra/checks/pytest.ini
 ```
 

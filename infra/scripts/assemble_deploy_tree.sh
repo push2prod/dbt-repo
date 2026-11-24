@@ -2,7 +2,7 @@
 # Assemble exactly what `deploy` will hold: <commit>'s tree with <overlay> copied
 # on top. The CI checks run against this directory.
 #
-#   infra/scripts/assemble_deploy_tree.sh <commit> <overlay-dir> <out-dir>
+#   bash infra/scripts/assemble_deploy_tree.sh <commit> <overlay-dir> <out-dir>
 set -euo pipefail
 
 commit=$1

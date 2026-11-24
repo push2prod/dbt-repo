@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Publish the generated overlay on the `deploy` branch that git-sync tracks.
 #
-#   infra/scripts/publish_deploy.sh <source-sha> <source-branch> <overlay-dir>
+#   bash infra/scripts/publish_deploy.sh <source-sha> <source-branch> <overlay-dir>
 #
 # `deploy` is rewritten on every deploy to: <source-branch>'s history, ending at
 # <source-sha>, plus ONE commit adding exactly the overlay's files in place

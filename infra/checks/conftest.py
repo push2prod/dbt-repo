@@ -2,7 +2,7 @@
 with the generated overlay on top, the same files CI commits to `deploy`.
 
     python -m infra.manifest.generate --out build/overlay
-    infra/scripts/assemble_deploy_tree.sh HEAD build/overlay build/deploy-tree
+    bash infra/scripts/assemble_deploy_tree.sh HEAD build/overlay build/deploy-tree
     BUNDLE_DIR=build/deploy-tree SUMMARY_FILE=build/overlay.summary.json pytest -c infra/checks/pytest.ini
 """
 
