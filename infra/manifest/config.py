@@ -31,11 +31,12 @@ DEFAULTS: dict[str, Any] = {
         "target": "prod",
         "ci_profiles_dir": "infra/profiles",
         "mapping": {
-            "class": "cosmos.profiles.TrinoLDAPProfileMapping",
+            # Trino without authentication (utils/dbt_factory/profiles.py).
+            "class": "utils.dbt_factory.profiles.TrinoNoAuthProfileMapping",
             "conn_id": "trino_default",
             # The Airflow connection has no fields for these: database (the catalog) and
-            # schema are required; Cosmos maps no http_scheme, and password auth needs https.
-            "profile_args": {"database": "your_catalog", "schema": "your_schema", "http_scheme": "https"},
+            # schema are required; Cosmos maps no http_scheme (https if TLS is on).
+            "profile_args": {"database": "your_catalog", "schema": "your_schema", "http_scheme": "http"},
         },
     },
     # Env for `dbt parse` in CI: values for env_var() calls in the projects. Optional.

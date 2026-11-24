@@ -18,19 +18,22 @@ profile:
   # Dummy profiles.yml for `dbt parse` / `dbt ls` / `dbt compile` in CI. Not deployed.
   ci_profiles_dir: infra/profiles
   # What Airflow tasks use: Cosmos builds the profile from this Airflow connection.
-  # Trino, user + password (LDAP): host, port, login and password come from the
-  # Airflow connection (type "trino", provider apache-airflow-providers-trino).
-  # Other Trino auth methods in Cosmos, same profile_args:
+  # Trino without authentication (dbt-trino `method: none`): host, port and login
+  # (dbt's `user`) come from the Airflow connection (type "trino", provider
+  # apache-airflow-providers-trino); no password. The class is this repo's own
+  # (utils/dbt_factory/profiles.py): Cosmos ships no no-auth Trino mapping.
+  # With authentication, use a Cosmos mapping instead (same profile_args):
+  #   cosmos.profiles.TrinoLDAPProfileMapping         login + password; needs http_scheme: https
   #   cosmos.profiles.TrinoCertificateProfileMapping  client cert/key paths in the
   #                                                   connection extras (certs__client_cert_path, certs__client_key_path)
   #   cosmos.profiles.TrinoJWTProfileMapping          token in the connection extras (jwt__token)
   mapping:
-    class: cosmos.profiles.TrinoLDAPProfileMapping
+    class: utils.dbt_factory.profiles.TrinoNoAuthProfileMapping
     conn_id: trino_default
     # Extra profile fields the Airflow connection can't carry. Trino needs
     # `database` (the catalog) and `schema`: replace the placeholders. Cosmos maps
-    # no `http_scheme`, and dbt-trino defaults to http, which password auth refuses.
-    profile_args: {database: your_catalog, schema: your_schema, http_scheme: https}
+    # no `http_scheme`: http for a plain server, https if it has TLS.
+    profile_args: {database: your_catalog, schema: your_schema, http_scheme: http}
 
 # Env for `dbt parse` in CI: values for env_var() calls in the projects. Optional.
 parse_env: infra/manifest/parse.env

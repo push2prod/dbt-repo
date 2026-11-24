@@ -124,8 +124,10 @@ Project setup:
 * **Add a project:** add its directory where `projects.include` finds it
   (`dbt_project.yml`, `packages.yml`, `package-lock.yml`; no `profiles.yml`
   needed), then a DAG file for it as above.
-* **Warehouse:** Trino. Set the Airflow connection `trino_default` (type `trino`)
-  and replace the `your_catalog` / `your_schema` placeholders in
+* **Warehouse:** Trino, without authentication by default (this repo's
+  `utils.dbt_factory.profiles.TrinoNoAuthProfileMapping`; LDAP, JWT and
+  certificate mappings are documented alternatives). Set the Airflow connection
+  `trino_default` (type `trino`: host, port, login) and replace the `your_catalog` / `your_schema` placeholders in
   `profile.mapping.profile_args` (`infra/dbt_bundle.yml`). Switching warehouses is
   four changes (dbt adapter, dummy CI profile, Airflow provider, Cosmos mapping +
   connection): see [infra/docs/ci-cd.md](infra/docs/ci-cd.md#warehouse-trino-and-how-to-switch).

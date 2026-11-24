@@ -95,19 +95,28 @@ the same four changes, nothing else:
 | 1 | dbt adapter, in the dbt venv (CI and the image) | `infra/requirements/dbt.txt` | `dbt-trino==1.11.0` (must fit the `dbt-core` / `dbt-adapters` / `dbt-common` pins) |
 | 2 | dummy CI profile (`type` = that adapter; never connects) | `infra/profiles/profiles.yml` | `type: trino`, `method: none`, dummy host/port/user/database/schema |
 | 3 | Airflow provider for the connection type | `infra/requirements/airflow-image.txt` | `apache-airflow-providers-trino==6.0.0` (from the Airflow 2.10.5 constraints) |
-| 4 | Cosmos profile mapping + Airflow connection | `infra/dbt_bundle.yml` `profile.mapping` | `cosmos.profiles.TrinoLDAPProfileMapping`, `conn_id: trino_default`, `profile_args: {database: <catalog>, schema: <schema>, http_scheme: https}` |
+| 4 | Cosmos profile mapping + Airflow connection | `infra/dbt_bundle.yml` `profile.mapping` | `utils.dbt_factory.profiles.TrinoNoAuthProfileMapping`, `conn_id: trino_default`, `profile_args: {database: <catalog>, schema: <schema>, http_scheme: http}` |
 
 Notes for Trino:
 
-* The Airflow connection (`trino_default`, type `trino`) supplies host, port,
-  login and password; `database` (the Trino catalog) and `schema` have no
-  connection fields, so they go in `profile_args` (the mapping requires them).
-  Replace the `your_catalog` / `your_schema` placeholders. Cosmos maps no
-  `http_scheme` from the connection and dbt-trino defaults to `http`, which the
-  Trino client refuses for password auth, hence `http_scheme: https`.
-* Other auth methods: `TrinoCertificateProfileMapping` (client cert/key paths in
-  the connection extras `certs__client_cert_path`, `certs__client_key_path`) or
-  `TrinoJWTProfileMapping` (`jwt__token` in the extras). Same `profile_args`.
+* **No authentication is the default.** Cosmos 1.10 ships only LDAP (password),
+  JWT and certificate Trino mappings, and LDAP fails on a connection without a
+  password ("cannot find value for secret field password"). So the repo has its
+  own `TrinoNoAuthProfileMapping` (`utils/dbt_factory/profiles.py`, a subclass of
+  Cosmos' Trino base mapping): dbt-trino `method: none`, no secret. The factory
+  imports it by its class path like any Cosmos mapping.
+* The Airflow connection (`trino_default`, type `trino`) supplies host, port and
+  login (dbt's `user`); `database` (the Trino catalog) and `schema` have no
+  connection fields, so they go in `profile_args` (every Trino mapping requires
+  them). Replace the `your_catalog` / `your_schema` placeholders. Cosmos maps no
+  `http_scheme`: `http` for a plain server, `https` if it has TLS.
+* **With authentication**, switch `profile.mapping.class` to a Cosmos mapping,
+  same `profile_args`:
+  * `cosmos.profiles.TrinoLDAPProfileMapping`: login + password from the
+    connection; set `http_scheme: https` (the Trino client refuses passwords over http).
+  * `cosmos.profiles.TrinoJWTProfileMapping`: `jwt__token` in the connection extras.
+  * `cosmos.profiles.TrinoCertificateProfileMapping`: client cert/key paths in the
+    extras `certs__client_cert_path`, `certs__client_key_path`.
 * dbt runs in its own venv, so dbt-trino's `trino` client and the provider's
   (Airflow constraints) never have to agree.
 * Models must be valid Trino SQL. `test_compile` renders every model's Jinja in
