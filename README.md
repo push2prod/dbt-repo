@@ -12,9 +12,11 @@ Design and rationale: [infra/docs/ci-cd.md](infra/docs/ci-cd.md).
 
 ```
 projects/<dir>/        dbt projects (default glob `projects/*`; any layout via projects.include)
+  example/             sample project for the example DAG; delete both once you add your own
 packages/<pkg>/        local dbt packages (optional), used as `local: ../../packages/<pkg>`
 dags/                  the Airflow DAG folder (git-sync subPath): hand-written DAG files
-                       calling dbt_dag(...) (see "Add a DAG"), nothing else
+                       calling dbt_dag(...) (see "Add a DAG"), nothing else;
+                       example_dbt_dag.py is the commented template to copy
 utils/dbt_factory/     Cosmos DAG factory (`from utils.dbt_factory import dbt_dag`);
                        reads projects.json (generated, only on `deploy`)
 .gitlab-ci.yml         validate + deploy; every step calls infra/
@@ -82,9 +84,9 @@ Project setup:
 
 ## Common tasks
 
-* **Add a DAG:** in a DAG file under `dags/` (one per project keeps parse
-  times independent), call the factory and assign the result to a module-level
-  name. `<name>` is the project's dbt `name:`:
+* **Add a DAG:** copy [`dags/example_dbt_dag.py`](dags/example_dbt_dag.py)
+  (one DAG file per project keeps parse times independent), call the factory and
+  assign the result to a module-level name. `<name>` is the project's dbt `name:`:
   ```python
   # Airflow DAG file: Cosmos DAGs for the "<name>" dbt project.
   from utils.dbt_factory import dbt_dag
@@ -95,9 +97,13 @@ Project setup:
       schedule="0 3 * * *",
       select=["tag:campaigns"],
       exclude=["tag:deprecated"],
+      retries=2,                      # overrides dags.defaults.retries for this DAG
   )
   ```
-  Defaults (start_date, retries, tags, ...) come from `dags.defaults` in
+  The example DAG runs the sample project `projects/example` (3 models, one
+  excluded by tag). It is there so this template's CI passes before you add a
+  project (the generator fails when it finds none) and so the checks exercise a
+  real DAG; delete both once your own projects and DAGs are in. Defaults (start_date, retries, tags, ...) come from `dags.defaults` in
   `infra/dbt_bundle.yml`; pass any of them, or any other `DbtDag`/`DAG` argument, to
   override. Keep the word "Airflow" in the file (a comment is enough): Airflow's
   safe mode skips `.py` files that don't contain both "airflow" and "dag".

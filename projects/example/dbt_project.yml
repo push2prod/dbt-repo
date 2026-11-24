@@ -1,0 +1,12 @@
+# Sample dbt project for the example DAG (dags/example_dbt_dag.py). It keeps
+# this template's CI green out of the box (the generator needs at least one
+# project) and gives the checks something real to verify. Delete it, with the
+# example DAG, once your own projects are in projects/.
+name: example
+version: "1.0"
+config-version: 2
+# No `profile:`: every project uses the one profile in infra/dbt_bundle.yml.
+
+models:
+  example:
+    +materialized: view

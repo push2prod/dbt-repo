@@ -49,6 +49,11 @@ the DAG folder under it, so DAG files and factory always come from one
 revision's checkout. The registry `projects.json` is generated into the factory
 package. The CI checks put the deploy tree's root on `sys.path` the same way.
 
+The template ships one sample project, `projects/example`, and the commented DAG
+`dags/example_dbt_dag.py` that uses it: the generator fails when it finds no
+project, so this keeps the template's own CI meaningful, and the example is the
+file to copy for new DAGs. Delete both once real projects are in.
+
 `infra/` is on `deploy` too (it is part of the source commit) but never imported by
 Airflow: nothing imports `infra`, and it is outside the DAG folder.
 
