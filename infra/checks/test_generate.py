@@ -62,7 +62,7 @@ def dag_files(name: str) -> dict[str, str]:
     return {
         f"dags/dbt_{name}.py": (
             f"# Airflow DAG file for the {name} dbt project.\n"
-            "from dbt_factory import dbt_dag\n\n"
+            "from utils.dbt_factory import dbt_dag\n\n"
             f'dag = dbt_dag("{name}", dag_id="dbt_{name}", select=["path:models"])\n'
         ),
     }
@@ -71,8 +71,13 @@ def dag_files(name: str) -> dict[str, str]:
 def repo(tmp_path: Path, projects: dict[str, dict[str, str]], extra: dict[str, str] | None = None) -> Path:
     """A source dir: ``projects`` maps a project path to its files."""
     src = tmp_path / "src"
-    factory = (REPO / "dags/dbt_factory/__init__.py").read_text()
-    files = {"infra/profiles/profiles.yml": PROFILES, "dags/dbt_factory/__init__.py": factory, **(extra or {})}
+    factory = (REPO / "utils/dbt_factory/__init__.py").read_text()
+    files = {
+        "infra/profiles/profiles.yml": PROFILES,
+        "utils/__init__.py": "",
+        "utils/dbt_factory/__init__.py": factory,
+        **(extra or {}),
+    }
     for path, pfiles in projects.items():
         files.update({f"{path}/{k}": v for k, v in pfiles.items()})
         name = next(line.split(":", 1)[1].strip() for line in pfiles["dbt_project.yml"].splitlines())
@@ -145,6 +150,13 @@ def test_unknown_config_key(tmp_path: Path) -> None:
         load_config(src)
 
 
+@pytest.mark.parametrize("value", ["../outside", "/abs/dbt_factory", ""])
+def test_factory_dir_must_stay_in_repo(tmp_path: Path, value: str) -> None:
+    src = repo(tmp_path, {"projects/a": project("a")}, {CONFIG_FILE: f"dags: {{factory_dir: '{value}'}}\n"})
+    with pytest.raises(ConfigError, match="dags.factory_dir must be a path inside the repo"):
+        load_config(src)
+
+
 def test_repo_config_is_valid_and_matches_defaults() -> None:
     """infra/dbt_bundle.yml documents the defaults: it must load, and equal config.DEFAULTS."""
     raw = yaml.safe_load((REPO / CONFIG_FILE).read_text())
@@ -176,11 +188,11 @@ def test_install_mode_overlay_is_only_manifests(tmp_path: Path) -> None:
     out = tmp_path / "overlay"
     assert generate(src, out) == {"a": "built", "b": "built"}
     assert files_in(out) == [
-        "dags/dbt_factory/projects.json",
         "projects/a/target/manifest.json",
         "teams/t/b/target/manifest.json",
+        "utils/dbt_factory/projects.json",
     ]
-    reg = json.loads((out / "dags/dbt_factory/projects.json").read_text())
+    reg = json.loads((out / "utils/dbt_factory/projects.json").read_text())
     assert reg["dbt_packages"] == "install"
     assert {n: e["path"] for n, e in reg["projects"].items()} == {"a": "projects/a", "b": "teams/t/b"}
     assert not (src / "projects/a/target").exists(), "dbt must not run in the source tree"
@@ -199,12 +211,12 @@ def test_only_changed_projects_are_reparsed(tmp_path: Path) -> None:
     assert generate(src, v1) == {"a": "built", "b": "built"}
 
     # ship mode (the default): dbt_packages/ (dereferenced) next to target/, nothing else from the source.
-    reg = json.loads((v1 / "dags/dbt_factory/projects.json").read_text())
+    reg = json.loads((v1 / "utils/dbt_factory/projects.json").read_text())
     assert {n: e["path"] for n, e in reg["projects"].items()} == {"a": "projects/a", "b": "projects/b"}
     assert "projects/a/dbt_packages/shared/macros/m.sql" in files_in(v1)
     assert not (v1 / "projects/a/dbt_packages/shared").is_symlink()
     assert {f for f in files_in(v1) if "dbt_packages" not in f} == {
-        "dags/dbt_factory/projects.json",
+        "utils/dbt_factory/projects.json",
         "projects/a/target/manifest.json",
         "projects/b/target/manifest.json",
     }

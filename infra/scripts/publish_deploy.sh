@@ -5,7 +5,7 @@
 #
 # `deploy` is rewritten on every deploy to: <source-branch>'s history, ending at
 # <source-sha>, plus ONE commit adding exactly the overlay's files in place
-# (<project>/target/manifest.json, dbt_packages/, dags/dbt_factory/projects.json).
+# (<project>/target/manifest.json, dbt_packages/, utils/dbt_factory/projects.json).
 # So `git diff <source-sha> deploy` lists only generated files.
 #
 # Needs `origin` to be pushable. Commit identity: DEPLOY_GIT_NAME / DEPLOY_GIT_EMAIL.

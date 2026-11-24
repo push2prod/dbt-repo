@@ -11,7 +11,7 @@ runs out of CPU, misses heartbeats, and looks hung to the scheduler.
 * CI finds the dbt projects (`infra/dbt_bundle.yml`), runs `dbt deps` + `dbt parse`
   per project, and keeps only the generated files (the *overlay*):
   `<project>/target/manifest.json`, `<project>/dbt_packages/`, and the registry
-  `dags/dbt_factory/projects.json`.
+  `utils/dbt_factory/projects.json`.
 * Cosmos reads the manifest in an explicit `LoadMode.DBT_MANIFEST` (no silent
   fallback to `dbt ls`), so DAG parsing runs no dbt at all.
 * The `deploy` branch is the default branch's commit plus one commit that adds
@@ -22,7 +22,8 @@ runs out of CPU, misses heartbeats, and looks hung to the scheduler.
 ## Repo layout: dbt content at the root, tooling in `infra/`
 
 The repo root is a plain dbt repo: `projects/`, `packages/`, `dags/` (the
-Airflow DAG folder, git-sync `subPath: dags`), plus `.gitlab-ci.yml`, which GitLab
+Airflow DAG folder, git-sync `subPath: dags`), `utils/` (Python the DAG files
+import, e.g. the DAG factory), plus `.gitlab-ci.yml`, which GitLab
 only reads from the root. Everything CI/CD needs lives in `infra/`:
 
 | path | what |
@@ -35,13 +36,21 @@ only reads from the root. Everything CI/CD needs lives in `infra/`:
 | `infra/airflow/` | Helm values (`values.yaml`) and the reference image `Dockerfile` |
 | `infra/requirements/` | `dbt.txt` (dbt venv), `airflow-image.txt`, `airflow.txt` |
 
-`dags/dbt_factory/` stays in `dags/`: DAG files run `from dbt_factory import dbt_dag`,
-which only works because Airflow puts the DAG folder on `sys.path`, and the
-registry it reads (`dags/dbt_factory/projects.json`) is written next to it. It is
-runtime code that ships with the source tree, not CI tooling.
+The DAG factory is `utils/dbt_factory/` (`dags.factory_dir`), outside the DAG
+folder, so `dags/` holds only DAG files. DAG files import it as
+`from utils.dbt_factory import dbt_dag`. That needs the git-sync checkout root on
+`sys.path`, which Airflow doesn't add by itself (it adds only the DAG folder):
+`infra/airflow/values.yaml` sets `PYTHONPATH=/opt/airflow/dags/repo`, the
+checkout root for the chart's default `dags.mountPath` (`$AIRFLOW_HOME/dags`) and
+git-sync's link `repo`. The chart's top-level `env` reaches every Airflow
+container, KubernetesExecutor task pods included, so scheduler, DAG processor and
+tasks all import the same way. `repo` is the symlink git-sync swaps, exactly like
+the DAG folder under it, so DAG files and factory always come from one
+revision's checkout. The registry `projects.json` is generated into the factory
+package. The CI checks put the deploy tree's root on `sys.path` the same way.
 
-`infra/` is on `deploy` too (it is part of the source commit) but outside the
-DAG folder, so Airflow never imports it.
+`infra/` is on `deploy` too (it is part of the source commit) but never imported by
+Airflow: nothing imports `infra`, and it is outside the DAG folder.
 
 ## Configuration (`infra/dbt_bundle.yml`)
 
@@ -63,7 +72,9 @@ points the generator at another file. Unknown keys, wrong types and an invalid
   Cosmos runs `dbt deps` in every task: that needs network to the package
   sources, and can't work with `local:` packages (Cosmos runs each task in a
   temp dir, where `../../packages/x` doesn't resolve), so the generator refuses it then.
-* `dags`: the DAG directory, and defaults for `dbt_dag(...)`.
+* `dags`: `dir`, the DAG folder (git-sync `subPath`); `factory_dir`, the DAG factory
+  package (default `utils/dbt_factory`, imported by that dotted path; the registry is
+  written into it); `defaults` for `dbt_dag(...)`. Both paths must stay inside the repo.
 
 ## Manifest generation (`infra/manifest/`)
 
@@ -93,7 +104,7 @@ python -m infra.manifest.generate --out <overlay> --project <name>   # one proje
   has the same layout as the source and `local: ../../packages/...` resolves at
   runtime. `dbt deps` symlinks local packages; the shipped `dbt_packages/` has
   them dereferenced.
-* **The registry.** The generator writes `<dags dir>/dbt_factory/projects.json`:
+* **The registry.** The generator writes `<dags.factory_dir>/projects.json` (`utils/dbt_factory/projects.json`):
   every project's path and input hash, the profile name, target and mapping,
   and the DAG defaults. The DAG factory and the CI checks read it instead of
   assuming a layout, so they can't drift from what CI built.
@@ -103,7 +114,7 @@ python -m infra.manifest.generate --out <overlay> --project <name>   # one proje
   with a dummy profile and the tasks use a Cosmos profile mapping, so a shipped
   msgpack would be thrown away; the factory sets `partial_parse=False`.
 
-## DAGs (`dags/dbt_factory/` + one file per project)
+## DAGs (`utils/dbt_factory/` + one file per project in `dags/`)
 
 * DAG files are written by hand. Each DAG is one call,
   `dbt_dag("<project>", dag_id=..., schedule=..., select=[...], exclude=[...])`,

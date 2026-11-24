@@ -28,7 +28,7 @@ def test_every_dbt_dag_reaches_airflow(dagbag: DagBag) -> None:
     """dbt_dag(...) called, but Airflow didn't collect the DAG: its result isn't
     assigned to a module-level name, or safe mode skipped the whole file (it must
     contain both "airflow" and "dag")."""
-    import dbt_factory  # the bundle's copy: the dagbag fixture put DAGS_DIR first on sys.path
+    from utils import dbt_factory  # the deploy tree's copy: the dagbag fixture put its root first on sys.path
 
     dropped = sorted(set(dbt_factory.CREATED) - set(dagbag.dag_ids))
     assert not dropped, f"dbt_dag(...) created these DAGs, but Airflow didn't collect them: {dropped}"

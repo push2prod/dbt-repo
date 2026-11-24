@@ -13,9 +13,10 @@ Design and rationale: [infra/docs/ci-cd.md](infra/docs/ci-cd.md).
 ```
 projects/<dir>/        dbt projects (default glob `projects/*`; any layout via projects.include)
 packages/<pkg>/        local dbt packages (optional), used as `local: ../../packages/<pkg>`
-dags/                  the Airflow DAG folder (git-sync subPath)
-  *.py                 hand-written DAG files calling dbt_dag(...) (see "Add a DAG")
-  dbt_factory/         Cosmos DAG factory; reads projects.json (generated, only on `deploy`)
+dags/                  the Airflow DAG folder (git-sync subPath): hand-written DAG files
+                       calling dbt_dag(...) (see "Add a DAG"), nothing else
+utils/dbt_factory/     Cosmos DAG factory (`from utils.dbt_factory import dbt_dag`);
+                       reads projects.json (generated, only on `deploy`)
 .gitlab-ci.yml         validate + deploy; every step calls infra/
 infra/                 all CI/CD tooling and generation inputs:
   dbt_bundle.yml       the bundle config: projects, shared profile, parse env, DAG defaults
@@ -86,7 +87,7 @@ Project setup:
   name. `<name>` is the project's dbt `name:`:
   ```python
   # Airflow DAG file: Cosmos DAGs for the "<name>" dbt project.
-  from dbt_factory import dbt_dag
+  from utils.dbt_factory import dbt_dag
 
   campaigns = dbt_dag(
       "<name>",

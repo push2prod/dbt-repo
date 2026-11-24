@@ -44,7 +44,12 @@ DEFAULTS: dict[str, Any] = {
     #            package sources; no `local:` packages, see discover()).
     "dbt_packages": "ship",
     "dags": {
+        # The Airflow DAG folder (git-sync subPath): the hand-written DAG files.
         "dir": "dags",
+        # The DAG factory package; DAG files import it by this path as a dotted name
+        # (utils/dbt_factory -> `from utils.dbt_factory import dbt_dag`), with the repo
+        # root on PYTHONPATH. The generated registry projects.json is written into it.
+        "factory_dir": "utils/dbt_factory",
         # Defaults for dbt_dag(...) in the factory; a DAG file overrides them per DAG.
         "defaults": {
             "start_date": "2024-01-01",
@@ -99,6 +104,11 @@ class Config:
         """Relative to the source (and to the bundle root)."""
         return Path(self.raw["dags"]["dir"])
 
+    @property
+    def factory_dir(self) -> Path:
+        """Relative to the source (and to the bundle root)."""
+        return Path(self.raw["dags"]["factory_dir"])
+
 
 def _merge(base: dict[str, Any], override: dict[str, Any], where: str = "") -> dict[str, Any]:
     out = copy.deepcopy(base)
@@ -127,6 +137,10 @@ def load_config(source: Path, path: Path | None = None) -> Config:
     merged = _merge(DEFAULTS, raw)
     if merged["dbt_packages"] not in ("install", "ship"):
         raise ConfigError(f"{CONFIG_FILE}: dbt_packages must be 'install' or 'ship', not {merged['dbt_packages']!r}")
+    for key in ("dir", "factory_dir"):
+        value = merged["dags"][key]
+        if not isinstance(value, str) or not value or Path(value).is_absolute() or ".." in Path(value).parts:
+            raise ConfigError(f"{CONFIG_FILE}: dags.{key} must be a path inside the repo, not {value!r}")
     return Config(source=source.resolve(), raw=merged)
 
 

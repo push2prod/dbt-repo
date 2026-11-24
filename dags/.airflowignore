@@ -1,0 +1,2 @@
+# Airflow DAG folder (git-sync subPath: dags): only hand-written DAG files live here.
+# The DAG factory is utils/dbt_factory (import it as `from utils.dbt_factory import dbt_dag`).

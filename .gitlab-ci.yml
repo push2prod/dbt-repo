@@ -2,7 +2,7 @@
 # result, and on the default branch publish it on the `deploy` branch that git-sync
 # tracks: `deploy` = the source commit + one commit adding the generated files in
 # place (the "overlay": <project>/target/manifest.json, dbt_packages/,
-# dags/dbt_factory/projects.json). All tooling is under infra/: config
+# utils/dbt_factory/projects.json). All tooling is under infra/: config
 # infra/dbt_bundle.yml, generator infra/manifest, checks infra/checks, and the
 # shell steps in infra/scripts (this file only calls them).
 #

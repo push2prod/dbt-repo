@@ -1,5 +1,5 @@
 # Layout of this repo for infra.manifest.generate (and, through the generated
-# dags/dbt_factory/projects.json, for the Airflow DAG factory and the CI checks).
+# utils/dbt_factory/projects.json, for the Airflow DAG factory and the CI checks).
 # Every path is relative to the repo root (not to this file). Every key is
 # optional; the values below are the defaults (infra/manifest/config.py).
 
@@ -35,7 +35,11 @@ parse_env: infra/manifest/parse.env
 dbt_packages: ship
 
 dags:
-  dir: dags                        # hand-written DAG files + dags/dbt_factory
+  dir: dags                        # the DAG folder (git-sync subPath): hand-written DAG files only
+  # The DAG factory package. DAG files import it by this path as a dotted name
+  # (`from utils.dbt_factory import dbt_dag`): Airflow has the repo root on PYTHONPATH
+  # (infra/airflow/values.yaml). The generated projects.json is written into it.
+  factory_dir: utils/dbt_factory
   defaults:                        # defaults for dbt_dag(...); a DAG file can override any of them
     start_date: "2024-01-01"
     catchup: false

@@ -10,9 +10,17 @@ images:
     repository: your-registry/airflow-dbt
     tag: "2.10.5-cosmos1.10.1-dbt1.11.17"
 
+# `env` reaches every Airflow container, KubernetesExecutor task pods included
+# (chart: custom_airflow_environment, also in the pod template file).
 env:
-  - name: DBT_EXECUTABLE          # read by dags/dbt_factory
+  - name: DBT_EXECUTABLE          # read by utils/dbt_factory
     value: /opt/dbt-venv/bin/dbt
+  # The git-sync checkout root, so DAG files can `from utils.dbt_factory import dbt_dag`.
+  # = <dags.mountPath>/repo: chart default mountPath $AIRFLOW_HOME/dags, git-sync link
+  # "repo"; dags_folder is this + /<gitSync.subPath>. Change both if mountPath changes.
+  # "repo" is a symlink git-sync swaps atomically, like the DAG folder under it.
+  - name: PYTHONPATH
+    value: /opt/airflow/dags/repo
 
 dags:
   gitSync:
@@ -37,7 +45,7 @@ dags:
     #   can; set GITSYNC_STALE_WORKTREE_TIMEOUT above your longest task.)
     # Every task pod clones the deploy branch, so keep it shallow (depth: 1).
     # `deploy` = the default branch's tree + generated files in place
-    # (<project>/target/manifest.json, dbt_packages/, dags/dbt_factory/projects.json).
+    # (<project>/target/manifest.json, dbt_packages/, utils/dbt_factory/projects.json).
     env:
       # Keeps the sidecar's previous checkout briefly for a DAG-file parse that
       # is in flight during a swap. Tasks don't depend on it with this executor.
@@ -88,7 +96,7 @@ webserver:
 workers:
   # With the KubernetesExecutor this is the task *pod* spec: one pod per Cosmos
   # task, i.e. one dbt invocation. Each task parses its project in full: no
-  # partial_parse.msgpack is shipped (dags/dbt_factory sets partial_parse=False).
+  # partial_parse.msgpack is shipped (utils/dbt_factory sets partial_parse=False).
   # The dbt profile comes from the Airflow connection in infra/dbt_bundle.yml.
   resources:
     # dbt tasks are the CPU-heavy part. Size here, not on the processor.

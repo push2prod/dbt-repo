@@ -116,7 +116,11 @@ def dagbag(bundle_dir: Path) -> Iterator[DagBag]:
     with pytest.MonkeyPatch.context() as guard:
         for name in ("Popen", "run", "call", "check_call", "check_output"):
             guard.setattr(subprocess, name, forbidden)
-        sys.path.insert(0, str(DAGS_DIR))
+        # As in Airflow: the DAG folder, and the checkout root (PYTHONPATH in
+        # infra/airflow/values.yaml) so `utils.dbt_factory` is the deploy tree's copy.
+        for name in [m for m in sys.modules if m == "utils" or m.startswith("utils.")]:
+            del sys.modules[name]
+        sys.path[:0] = [str(DAGS_DIR), str(BUNDLE)]
         bag = DagBag(dag_folder=str(DAGS_DIR), include_examples=False, safe_mode=True)
     yield bag
     mp.undo()

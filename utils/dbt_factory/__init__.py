@@ -3,7 +3,7 @@
 DAG files are written by hand and call ``dbt_dag`` once per DAG:
 
     # Airflow DAG file: Cosmos DAGs for the "marketing" dbt project.
-    from dbt_factory import dbt_dag
+    from utils.dbt_factory import dbt_dag
 
     marketing_campaigns = dbt_dag(
         "marketing",                       # the project's dbt `name:`
@@ -17,6 +17,11 @@ in the file's globals. Keep "airflow" somewhere in the file (the comment above
 does it): Airflow's safe mode skips files without both "airflow" and "dag". CI
 fails on either mistake (infra/checks/test_dag_integrity.py). Any other ``DbtDag``/``DAG`` argument (description,
 callbacks, ``operator_args``, ``default_args`` ...) is passed through.
+
+This package lives outside the DAG folder (utils/dbt_factory, dbt_bundle
+`dags.factory_dir`), so DAG files import it as ``utils.dbt_factory``: Airflow has
+the git-sync checkout root on PYTHONPATH (infra/airflow/values.yaml), next to the
+DAG folder Airflow adds itself.
 
 The deploy branch is the source tree plus the generated files, each in place:
 <project>/target/manifest.json and this directory's projects.json.
@@ -68,8 +73,8 @@ def registry() -> dict[str, Any]:
 
 
 def bundle_root() -> Path:
-    """The repo root of the deploy checkout: dags_dir in the registry is relative to it."""
-    return FACTORY_DIR.parents[len(Path(registry()["dags_dir"]).parts)]
+    """The repo root of the deploy checkout: every path in the registry is relative to it."""
+    return FACTORY_DIR.parents[len(Path(registry()["factory_dir"]).parts) - 1]
 
 
 def project_dir(project: str) -> Path:

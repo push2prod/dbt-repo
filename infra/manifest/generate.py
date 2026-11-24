@@ -11,7 +11,7 @@ belongs to:
     <out>/
       <project path>/target/manifest.json     read by Cosmos at DAG parse time
       <project path>/dbt_packages/            only with `dbt_packages: ship`
-      <dags.dir>/dbt_factory/projects.json    the registry: each project's path and input
+      <dags.factory_dir>/projects.json        the registry: each project's path and input
                                               hash, the profile, DAG defaults
     <out>.summary.json                        built / reused per project, + what the CI checks
                                               need (outside the overlay, never deployed)
@@ -76,7 +76,7 @@ def global_inputs(config: Config, dbt_core: str) -> dict[str, str]:
 
 
 def _registry_path(config: Config) -> Path:
-    return config.dags_dir / "dbt_factory" / REGISTRY
+    return config.factory_dir / REGISTRY
 
 
 def previous_hashes(config: Config, previous: Path | None) -> dict[str, tuple[str, str]]:
@@ -93,6 +93,7 @@ def registry(config: Config, projects: list[Project], hashes: dict[str, str] | N
     return {
         "version": 1,
         "dags_dir": config.dags_dir.as_posix(),
+        "factory_dir": config.factory_dir.as_posix(),
         "dbt_packages": config.raw["dbt_packages"],
         "profile": {"name": profile["name"], "target": profile["target"], "mapping": profile["mapping"]},
         "dag_defaults": config.raw["dags"]["defaults"],
