@@ -15,13 +15,13 @@ projects/<dir>/        dbt projects (default glob `projects/*`; any layout via p
   example/             sample project for the example DAG; delete both once you add your own
 packages/<pkg>/        local dbt packages (optional), used as `local: ../../packages/<pkg>`
 dags/                  the Airflow DAG folder (git-sync subPath): hand-written DAG files
-                       calling dbt_dag(...) (see "Add a DAG"), nothing else;
+                       using dbt_task_group(...) (see "Add a DAG"), nothing else;
                        example_dbt_dag.py is the commented template to copy
-utils/dbt_factory/     Cosmos DAG factory (`from utils.dbt_factory import dbt_dag`);
+utils/dbt_factory/     Cosmos task-group factory (`from utils.dbt_factory import dbt_task_group`);
                        reads projects.json (generated, only on `deploy`)
 .gitlab-ci.yml         validate + deploy; every step calls infra/
 infra/                 all CI/CD tooling and generation inputs:
-  dbt_bundle.yml       the bundle config: projects, shared profile, parse env, DAG defaults
+  dbt_bundle.yml       the bundle config: projects, shared profile, parse env, dbt task defaults
   profiles/profiles.yml  dummy profile for CI parsing only; not used by Airflow
   manifest/            generator: generate.py · config.py · files.py · dbtvenv.py · parse.env
   checks/              pytest checks on the assembled deploy tree and the generator (+ pytest.ini)
@@ -34,7 +34,7 @@ infra/                 all CI/CD tooling and generation inputs:
 Rules the generator enforces (it fails the pipeline otherwise):
 
 * A project is named by **`name:` in its `dbt_project.yml`**; names are unique.
-  DAG files pass that name to `dbt_dag(...)`, not the folder name.
+  DAG files pass that name to `dbt_task_group(...)`, not the folder name.
 * Projects use the **one profile** in `infra/dbt_bundle.yml` (or set no `profile:`).
   At runtime Cosmos builds it from the Airflow connection in `profile.mapping`.
 * Local packages live inside the repo. `target-path` and `packages-install-path`
@@ -84,29 +84,40 @@ Project setup:
 
 ## Common tasks
 
-* **Add a DAG:** copy [`dags/example_dbt_dag.py`](dags/example_dbt_dag.py)
-  (one DAG file per project keeps parse times independent), call the factory and
-  assign the result to a module-level name. `<name>` is the project's dbt `name:`:
+* **Add a DAG:** copy [`dags/example_dbt_dag.py`](dags/example_dbt_dag.py). It
+  is a normal Airflow DAG (you set schedule, start_date, catchup, tags ... in it)
+  that runs dbt as a Cosmos task group between other tasks. `<name>` is the
+  project's dbt `name:`:
   ```python
-  # Airflow DAG file: Cosmos DAGs for the "<name>" dbt project.
-  from utils.dbt_factory import dbt_dag
+  # Airflow DAG file: the "<name>" dbt models between two other tasks.
+  from datetime import datetime
 
-  campaigns = dbt_dag(
-      "<name>",
-      dag_id="dbt_<name>_campaigns",
-      schedule="0 3 * * *",
-      select=["tag:campaigns"],
-      exclude=["tag:deprecated"],
-      retries=2,                      # overrides dags.defaults.retries for this DAG
-  )
+  from airflow import DAG
+  from airflow.operators.empty import EmptyOperator
+
+  from utils.dbt_factory import dbt_task_group
+
+  with DAG("<name>_daily", schedule="0 3 * * *", start_date=datetime(2024, 1, 1), catchup=False) as dag:
+      campaigns = dbt_task_group(
+          "<name>",
+          group_id="campaigns",                 # unique in the DAG; prefixes the task ids
+          select=["tag:campaigns"],
+          exclude=["tag:deprecated"],
+          default_args={"retries": 2},          # this group's tasks only
+      )
+      EmptyOperator(task_id="start") >> campaigns >> EmptyOperator(task_id="end")
   ```
-  The example DAG runs the sample project `projects/example` (3 models, one
+  A DAG can hold several groups, from the same or different projects. The dbt
+  tasks' `retries` / `retry_delay` default to `dags.task_defaults` in
+  `infra/dbt_bundle.yml` (1 retry after 60s); the DAG's `default_args` override
+  that, and the group's `default_args` override both. Any other
+  `DbtTaskGroup`/`TaskGroup` argument (`operator_args`, `tooltip` ...) is passed
+  through. Keep the word "Airflow" in the file (a comment is enough): Airflow's
+  safe mode skips `.py` files that don't contain both "airflow" and "dag".
+  The example runs the sample project `projects/example` (3 models, one
   excluded by tag). It is there so this template's CI passes before you add a
   project (the generator fails when it finds none) and so the checks exercise a
-  real DAG; delete both once your own projects and DAGs are in. Defaults (start_date, retries, tags, ...) come from `dags.defaults` in
-  `infra/dbt_bundle.yml`; pass any of them, or any other `DbtDag`/`DAG` argument, to
-  override. Keep the word "Airflow" in the file (a comment is enough): Airflow's
-  safe mode skips `.py` files that don't contain both "airflow" and "dag".
+  real DAG; delete both once your own projects and DAGs are in.
 * **Add a project:** add its directory where `projects.include` finds it
   (`dbt_project.yml`, `packages.yml`, `package-lock.yml`; no `profiles.yml`
   needed), then a DAG file for it as above.

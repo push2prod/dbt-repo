@@ -47,15 +47,13 @@ DEFAULTS: dict[str, Any] = {
         # The Airflow DAG folder (git-sync subPath): the hand-written DAG files.
         "dir": "dags",
         # The DAG factory package; DAG files import it by this path as a dotted name
-        # (utils/dbt_factory -> `from utils.dbt_factory import dbt_dag`), with the repo
+        # (utils/dbt_factory -> `from utils.dbt_factory import dbt_task_group`), with the repo
         # root on PYTHONPATH. The generated registry projects.json is written into it.
         "factory_dir": "utils/dbt_factory",
-        # Defaults for dbt_dag(...) in the factory; a DAG file overrides them per DAG.
-        "defaults": {
-            "start_date": "2024-01-01",
-            "catchup": False,
-            "max_active_runs": 1,
-            "tags": ["dbt"],
+        # Defaults for the dbt tasks of every dbt_task_group(...). The DAG's own
+        # default_args and the group's default_args override them. DAG-level settings
+        # (schedule, start_date, catchup, tags ...) belong in the DAG file.
+        "task_defaults": {
             # One retry covers the KubernetesExecutor parse/run skew: a pod that starts
             # just after a deploy clones the new revision. dbt materializations are
             # rebuilt whole, so a retry is safe.
@@ -116,7 +114,7 @@ def _merge(base: dict[str, Any], override: dict[str, Any], where: str = "") -> d
         if key not in base:
             raise ConfigError(f"{CONFIG_FILE}: unknown key {where}{key!r}")
         # Free-form mappings are replaced whole, not merged key by key.
-        if isinstance(base[key], dict) and key not in ("profile_args", "defaults"):
+        if isinstance(base[key], dict) and key not in ("profile_args",):
             if not isinstance(value, dict):
                 raise ConfigError(f"{CONFIG_FILE}: {where}{key} must be a mapping")
             out[key] = _merge(base[key], value, f"{where}{key}.")
@@ -141,6 +139,9 @@ def load_config(source: Path, path: Path | None = None) -> Config:
         value = merged["dags"][key]
         if not isinstance(value, str) or not value or Path(value).is_absolute() or ".." in Path(value).parts:
             raise ConfigError(f"{CONFIG_FILE}: dags.{key} must be a path inside the repo, not {value!r}")
+    for key, value in merged["dags"]["task_defaults"].items():
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ConfigError(f"{CONFIG_FILE}: dags.task_defaults.{key} must be a whole number >= 0, not {value!r}")
     return Config(source=source.resolve(), raw=merged)
 
 

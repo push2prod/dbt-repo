@@ -1,31 +1,57 @@
-# Airflow DAG file: an example Cosmos DAG built with the DAG factory.
+# Airflow DAG file: an example DAG that runs dbt models as a Cosmos task group.
 #
-# Copy this file to start a DAG for your own dbt project. Keep one DAG file per
-# dbt project: each file is parsed on its own, so a big project can't push
-# another project's file past the parse timeout. Keep the word "Airflow" in the
+# Copy this file to start a DAG of your own. It is a normal Airflow DAG: you set
+# the schedule, start_date and so on here, and add dbt where you need it with
+# dbt_task_group(...), between any other tasks. Keep the word "Airflow" in the
 # file (this comment does it): Airflow's safe mode skips .py files that don't
 # mention both "airflow" and "dag".
 #
 # `utils.dbt_factory` lives at the repo root (utils/dbt_factory). Airflow imports
 # it because the git-sync checkout root is on PYTHONPATH (infra/airflow/values.yaml).
-from utils.dbt_factory import dbt_dag
+from datetime import datetime, timedelta
 
-# Assign every DAG to a module-level name: Airflow only collects DAGs it finds in
-# the module's globals (CI fails if a dbt_dag(...) result is dropped).
-example_daily = dbt_dag(
-    # The dbt project: its `name:` in dbt_project.yml (projects/example), not the folder name.
-    "example",
-    dag_id="dbt_example_daily",
+from airflow import DAG
+from airflow.operators.empty import EmptyOperator
+
+from utils.dbt_factory import dbt_task_group
+
+# Assign the DAG to a module-level name (here via `with ... as dag`): Airflow only
+# collects DAGs it finds in the module's globals. CI fails if a dbt task group ends
+# up in a DAG Airflow didn't collect.
+with DAG(
+    dag_id="example_daily",
     schedule="0 6 * * *",  # any Airflow schedule: cron, preset ("@daily"), timetable, or None
-    # Which dbt nodes the DAG runs, in dbt selector syntax. CI checks that Cosmos
-    # selects exactly what `dbt ls` does (infra/checks/test_selector_parity.py).
-    select=["tag:daily"],
-    exclude=["tag:deprecated"],
-    # Defaults come from `dags.defaults` in infra/dbt_bundle.yml (start_date,
-    # catchup, max_active_runs, tags, retries, retry_delay_seconds). Pass any of
-    # them to override it for this DAG only:
-    retries=2,  # default: 1
-    tags=["dbt", "example"],  # replaces the default tags; "dbt:example" is always added
-    # Any other DbtDag / DAG argument is passed through as-is:
-    description="Example: the daily models of the sample dbt project",
-)
+    start_date=datetime(2024, 1, 1),
+    catchup=False,
+    max_active_runs=1,
+    tags=["dbt", "example"],
+    description="Example: the daily models of the sample dbt project, between two other tasks",
+    # Applies to every task in the DAG, the dbt tasks included. The dbt tasks
+    # default to infra/dbt_bundle.yml `dags.task_defaults` (retries: 1, 60s delay);
+    # whatever the DAG sets here wins over those.
+    default_args={"owner": "data"},
+) as dag:
+    start = EmptyOperator(task_id="start")
+
+    daily_models = dbt_task_group(
+        # The dbt project: its `name:` in dbt_project.yml (projects/example), not the folder name.
+        "example",
+        # Unique within the DAG. It prefixes the group's tasks: daily_models.example_orders_run, ...
+        group_id="daily_models",
+        # Which dbt nodes the group runs, in dbt selector syntax. CI checks that Cosmos
+        # selects exactly what `dbt ls` does (infra/checks/test_selector_parity.py).
+        select=["tag:daily"],
+        exclude=["tag:deprecated"],
+        # Overrides for this group's tasks only; they win over the DAG's default_args
+        # and over dags.task_defaults:
+        default_args={"retries": 2, "retry_delay": timedelta(minutes=5)},
+        # Any other DbtTaskGroup / TaskGroup argument is passed through, e.g. extra
+        # arguments for every dbt operator in the group:
+        operator_args={"full_refresh": False},
+    )
+
+    end = EmptyOperator(task_id="end")
+
+    # A DAG can hold several dbt_task_group(...) calls (same or different projects),
+    # each with its own group_id, wired like any other task.
+    start >> daily_models >> end

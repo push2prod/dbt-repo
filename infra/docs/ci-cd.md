@@ -38,7 +38,7 @@ only reads from the root. Everything CI/CD needs lives in `infra/`:
 
 The DAG factory is `utils/dbt_factory/` (`dags.factory_dir`), outside the DAG
 folder, so `dags/` holds only DAG files. DAG files import it as
-`from utils.dbt_factory import dbt_dag`. That needs the git-sync checkout root on
+`from utils.dbt_factory import dbt_task_group`. That needs the git-sync checkout root on
 `sys.path`, which Airflow doesn't add by itself (it adds only the DAG folder):
 `infra/airflow/values.yaml` sets `PYTHONPATH=/opt/airflow/dags/repo`, the
 checkout root for the chart's default `dags.mountPath` (`$AIRFLOW_HOME/dags`) and
@@ -79,7 +79,10 @@ points the generator at another file. Unknown keys, wrong types and an invalid
   temp dir, where `../../packages/x` doesn't resolve), so the generator refuses it then.
 * `dags`: `dir`, the DAG folder (git-sync `subPath`); `factory_dir`, the DAG factory
   package (default `utils/dbt_factory`, imported by that dotted path; the registry is
-  written into it); `defaults` for `dbt_dag(...)`. Both paths must stay inside the repo.
+  written into it); `task_defaults` (`retries`, `retry_delay_seconds`) for the dbt
+  tasks of every `dbt_task_group(...)`. Both paths must stay inside the repo.
+  DAG-level settings (schedule, start_date, catchup, tags ...) are not in the
+  config: the DAG files set them, since the factory builds task groups, not DAGs.
 
 ## Manifest generation (`infra/manifest/`)
 
@@ -111,7 +114,7 @@ python -m infra.manifest.generate --out <overlay> --project <name>   # one proje
   them dereferenced.
 * **The registry.** The generator writes `<dags.factory_dir>/projects.json` (`utils/dbt_factory/projects.json`):
   every project's path and input hash, the profile name, target and mapping,
-  and the DAG defaults. The DAG factory and the CI checks read it instead of
+  and the dbt task defaults. The task-group factory and the CI checks read it instead of
   assuming a layout, so they can't drift from what CI built.
 * **No partial parse.** Only `manifest.json` ships. dbt reuses a
   `partial_parse.msgpack` only if the runtime profile hashes the same as the CI
@@ -119,20 +122,24 @@ python -m infra.manifest.generate --out <overlay> --project <name>   # one proje
   with a dummy profile and the tasks use a Cosmos profile mapping, so a shipped
   msgpack would be thrown away; the factory sets `partial_parse=False`.
 
-## DAGs (`utils/dbt_factory/` + one file per project in `dags/`)
+## DAGs (`dags/`) and the task-group factory (`utils/dbt_factory/`)
 
-* DAG files are written by hand. Each DAG is one call,
-  `dbt_dag("<project>", dag_id=..., schedule=..., select=[...], exclude=[...])`,
-  with the project's dbt `name:`, assigned to a module-level name. **One file
-  per project** keeps a big project from pushing another project's file past
-  the per-file parse timeout.
-* `dbt_dag` fills in what must not vary: an explicit `DBT_MANIFEST` load mode,
-  the shipped manifest's path, dbt from the venv as a subprocess
-  (`DBT_EXECUTABLE`), `install_dbt_deps` per `dbt_packages`, the profile from
-  the Airflow connection (`profile.mapping`). Everything else is a normal
-  `DbtDag` argument; defaults come from `dags.defaults`, including
-  `retries: 1`. The retry covers a task pod that starts
-  just after a deploy and clones the new revision.
+* DAG files are normal, hand-written Airflow DAGs (`with DAG(...)` or `@dag`):
+  schedule, start_date, catchup, tags and other tasks are theirs. dbt goes in as
+  `dbt_task_group("<project>", group_id=..., select=[...], exclude=[...])`, a
+  Cosmos `DbtTaskGroup` wired like any task (`start >> group >> end`). A DAG can
+  hold several groups, of one or more projects; `group_id` is unique per DAG and
+  prefixes the group's task ids. Keep big projects' DAGs in separate files, so
+  one can't push another past the per-file parse timeout.
+* `dbt_task_group` fills in what must not vary: an explicit `DBT_MANIFEST` load
+  mode, the shipped manifest's path, dbt from the venv as a subprocess
+  (`DBT_EXECUTABLE`), `install_dbt_deps` per `dbt_packages`, the profile from the
+  Airflow connection (`profile.mapping`). Everything else is a normal
+  `DbtTaskGroup` argument. The group's tasks default to `dags.task_defaults`
+  (`retries: 1` after 60s: the retry covers a task pod that starts just after a
+  deploy and clones the new revision); the DAG's `default_args` override that
+  (a TaskGroup's `default_args` would otherwise win over the DAG's), and the
+  group's own `default_args` override both. Called outside a DAG it raises.
 
 ## CI/CD
 
@@ -181,8 +188,8 @@ job, and the next pipeline rebuilds from the new state.
 
 | test | guards against |
 |---|---|
-| `test_dag_integrity` | import errors, slow files, empty DAGs, **any subprocess at parse time** (a `dbt ls` fallback), a DAG file whose `dbt_dag(...)` creates no DAG (not assigned to a module-level name, or skipped by safe mode), a Cosmos DAG not in `DBT_MANIFEST` mode or without its manifest |
-| `test_selector_parity` | Cosmos' Python selector disagreeing with `dbt ls`, for every Cosmos DAG the DAG files create (e.g. `fqn:` wildcards select nothing in Cosmos) |
+| `test_dag_integrity` | import errors, slow files, empty DAGs, **any subprocess at parse time** (a `dbt ls` fallback), a `dbt_task_group(...)` whose DAG Airflow doesn't collect (not assigned to a module-level name, or the file skipped by safe mode), a dbt task group not in `DBT_MANIFEST` mode, without its manifest, or with no tasks |
+| `test_selector_parity` | Cosmos' Python selector disagreeing with `dbt ls`, for every dbt task group the DAG files create (e.g. `fqn:` wildcards select nothing in Cosmos) |
 | `test_generate` | layout errors not caught; `infra/dbt_bundle.yml` out of sync with the defaults; rebuilding the wrong projects (model change → 1 project, DAG file → none, shared package → its users) |
 | `test_compile` | SQL that parses but can't render, e.g. a package macro without its prefix |
 

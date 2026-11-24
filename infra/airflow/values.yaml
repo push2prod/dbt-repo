@@ -15,7 +15,7 @@ images:
 env:
   - name: DBT_EXECUTABLE          # read by utils/dbt_factory
     value: /opt/dbt-venv/bin/dbt
-  # The git-sync checkout root, so DAG files can `from utils.dbt_factory import dbt_dag`.
+  # The git-sync checkout root, so DAG files can `from utils.dbt_factory import dbt_task_group`.
   # = <dags.mountPath>/repo: chart default mountPath $AIRFLOW_HOME/dags, git-sync link
   # "repo"; dags_folder is this + /<gitSync.subPath>. Change both if mountPath changes.
   # "repo" is a symlink git-sync swaps atomically, like the DAG folder under it.

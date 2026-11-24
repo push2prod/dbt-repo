@@ -37,13 +37,12 @@ dbt_packages: ship
 dags:
   dir: dags                        # the DAG folder (git-sync subPath): hand-written DAG files only
   # The DAG factory package. DAG files import it by this path as a dotted name
-  # (`from utils.dbt_factory import dbt_dag`): Airflow has the repo root on PYTHONPATH
+  # (`from utils.dbt_factory import dbt_task_group`): Airflow has the repo root on PYTHONPATH
   # (infra/airflow/values.yaml). The generated projects.json is written into it.
   factory_dir: utils/dbt_factory
-  defaults:                        # defaults for dbt_dag(...); a DAG file can override any of them
-    start_date: "2024-01-01"
-    catchup: false
-    max_active_runs: 1
-    tags: [dbt]
-    retries: 1
+  # Defaults for the dbt tasks of every dbt_task_group(...); the DAG's default_args
+  # and the group's default_args override them. The DAG itself (schedule,
+  # start_date, catchup, tags ...) is set in the DAG file.
+  task_defaults:
+    retries: 1                     # covers a task pod that starts just after a deploy
     retry_delay_seconds: 60

@@ -133,8 +133,13 @@ def dagbag(bundle_dir: Path) -> Iterator[DagBag]:
     mp.undo()
 
 
-def dbt_dags(bag: DagBag) -> dict[str, Any]:
-    """{dag_id: DbtDag} for every Cosmos DAG in ``bag``."""
-    from cosmos import DbtDag
+def dbt_task_groups(bag: DagBag) -> dict[str, Any]:
+    """{"<dag_id>/<group_id>": DbtTaskGroup} for every Cosmos task group in ``bag``'s DAGs (nested ones too)."""
+    from cosmos import DbtTaskGroup
 
-    return {dag_id: dag for dag_id, dag in bag.dags.items() if isinstance(dag, DbtDag)}
+    return {
+        f"{dag_id}/{group_id}": group
+        for dag_id, dag in bag.dags.items()
+        for group_id, group in dag.task_group_dict.items()
+        if isinstance(group, DbtTaskGroup)
+    }

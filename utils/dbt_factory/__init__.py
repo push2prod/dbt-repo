@@ -1,22 +1,31 @@
-"""Build Cosmos DAGs for the dbt projects in the registry (projects.json, written by infra.manifest.generate).
+"""Cosmos task groups for the dbt projects in the registry (projects.json, written by infra.manifest.generate).
 
-DAG files are written by hand and call ``dbt_dag`` once per DAG:
+DAG files are written by hand, as normal Airflow DAGs, and add dbt where they
+need it with ``dbt_task_group`` (a Cosmos ``DbtTaskGroup``), between any other tasks:
 
-    # Airflow DAG file: Cosmos DAGs for the "marketing" dbt project.
-    from utils.dbt_factory import dbt_dag
+    # Airflow DAG file: the marketing dbt models, between two other tasks.
+    from airflow import DAG
+    from airflow.operators.empty import EmptyOperator
+    from utils.dbt_factory import dbt_task_group
 
-    marketing_campaigns = dbt_dag(
-        "marketing",                       # the project's dbt `name:`
-        dag_id="dbt_marketing_campaigns",
-        schedule="0 3 * * *",
-        select=["tag:campaigns"],
-    )
+    with DAG("marketing_daily", schedule="0 3 * * *", start_date=datetime(2024, 1, 1), catchup=False):
+        start = EmptyOperator(task_id="start")
+        campaigns = dbt_task_group(
+            "marketing",                       # the project's dbt `name:`
+            group_id="campaigns",             # unique within the DAG; prefixes its task ids
+            select=["tag:campaigns"],
+        )
+        start >> campaigns >> EmptyOperator(task_id="end")
 
-Assign the result to a module-level name: Airflow only picks up DAGs it finds
-in the file's globals. Keep "airflow" somewhere in the file (the comment above
-does it): Airflow's safe mode skips files without both "airflow" and "dag". CI
-fails on either mistake (infra/checks/test_dag_integrity.py). Any other ``DbtDag``/``DAG`` argument (description,
-callbacks, ``operator_args``, ``default_args`` ...) is passed through.
+A DAG can hold several groups, from the same or different projects. The DAG
+itself (schedule, start_date, catchup, tags ...) is the DAG file's business;
+the factory only sets the dbt tasks' retry default (infra/dbt_bundle.yml
+`dags.task_defaults`), under the DAG's own ``default_args``. Keep "airflow"
+somewhere in the file (the comment above does it): Airflow's safe mode skips
+files without both "airflow" and "dag". CI fails on a group that doesn't end up
+in a collected DAG (infra/checks/test_dag_integrity.py). Any other
+``DbtTaskGroup``/``TaskGroup`` argument (``operator_args``, ``default_args``,
+``tooltip`` ...) is passed through.
 
 This package lives outside the DAG folder (utils/dbt_factory, dbt_bundle
 `dags.factory_dir`), so DAG files import it as ``utils.dbt_factory``: Airflow has
@@ -26,7 +35,7 @@ DAG folder Airflow adds itself.
 The deploy branch is the source tree plus the generated files, each in place:
 <project>/target/manifest.json and this directory's projects.json.
 
-Parse-time cost: one small JSON read, then one manifest.json read per DAG.
+Parse-time cost: one small JSON read, then one manifest.json read per task group.
 No dbt subprocess runs at parse time.
 
 * ``LoadMode.DBT_MANIFEST`` is set explicitly. With ``AUTOMATIC``, a
@@ -52,18 +61,20 @@ import importlib
 import json
 import os
 from collections.abc import Sequence
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
-from cosmos import DbtDag, ExecutionConfig, LoadMode, ProfileConfig, ProjectConfig, RenderConfig
+from airflow.models.dag import DagContext
+from cosmos import DbtTaskGroup, ExecutionConfig, LoadMode, ProfileConfig, ProjectConfig, RenderConfig
 from cosmos.constants import InvocationMode
 
 FACTORY_DIR = Path(__file__).resolve().parent
 DBT_EXECUTABLE = os.environ.get("DBT_EXECUTABLE", "/opt/dbt-venv/bin/dbt")
-# Every dag_id dbt_dag() created in this process. CI compares it with what Airflow
-# collected: a DAG not assigned to a module-level name is silently dropped.
-CREATED: list[str] = []
+# (dag_id, group_id) of every group dbt_task_group() created in this process. CI
+# checks each one is in a DAG Airflow collected: a DAG not assigned to a
+# module-level name (or not created by `with DAG(...)` / a called @dag) is dropped.
+CREATED: list[tuple[str, str]] = []
 
 
 @functools.cache
@@ -111,39 +122,42 @@ def project_config(project: str) -> ProjectConfig:
     )
 
 
-def dbt_dag(
+def dbt_task_group(
     project: str,
-    dag_id: str,
+    group_id: str,
     *,
     select: Sequence[str] = (),
     exclude: Sequence[str] = (),
-    schedule: Any = None,
-    **dag_kwargs: Any,
-) -> DbtDag:
-    """One Cosmos DAG for ``project`` (its dbt `name:`), running the nodes ``select``/``exclude`` pick.
+    **group_kwargs: Any,
+) -> DbtTaskGroup:
+    """A Cosmos task group running the nodes of ``project`` (its dbt `name:`) that ``select``/``exclude`` pick.
 
-    Defaults (infra/dbt_bundle.yml `dags.defaults`): start_date, catchup,
-    max_active_runs, tags, retries, retry_delay_seconds. Pass any of them, or any
-    other DbtDag/DAG argument, to override. ``default_args`` is merged with the
-    retry defaults; ``tags`` gets ``dbt:<project>`` appended.
+    Call it inside a DAG (``with DAG(...)``, an ``@dag`` function, or pass
+    ``dag=``). ``group_id`` must be unique within the DAG and prefixes the
+    group's task ids (``<group_id>.<model>_run``).
+
+    The dbt tasks' ``retries`` / ``retry_delay`` default to infra/dbt_bundle.yml
+    `dags.task_defaults`. The DAG's ``default_args`` override those, and this
+    call's ``default_args`` override both. Everything else (``operator_args``,
+    ``tooltip``, ``prefix_group_id`` ...) goes to ``DbtTaskGroup`` as-is.
     """
-    defaults = dict(registry()["dag_defaults"])
-    start_date = dag_kwargs.pop("start_date", defaults.pop("start_date"))
-    if not isinstance(start_date, datetime):
-        start_date = datetime.fromisoformat(str(start_date))
-    retries = dag_kwargs.pop("retries", defaults.pop("retries"))
-    retry_delay = timedelta(seconds=dag_kwargs.pop("retry_delay_seconds", defaults.pop("retry_delay_seconds")))
-    tags = [*dag_kwargs.pop("tags", defaults.pop("tags")), f"dbt:{project}"]
-    default_args = {"retries": retries, "retry_delay": retry_delay, **dag_kwargs.pop("default_args", {})}
-    for key, value in defaults.items():  # catchup, max_active_runs
-        dag_kwargs.setdefault(key, value)
+    dag = group_kwargs.get("dag") or DagContext.get_current_dag()
+    if dag is None:
+        raise RuntimeError(
+            f"dbt_task_group({project!r}, group_id={group_id!r}) must be called inside a DAG "
+            "(`with DAG(...):`, an @dag function) or be given dag="
+        )
+    task_defaults = dict(registry()["task_defaults"])
+    default_args = {
+        "retries": task_defaults["retries"],
+        "retry_delay": timedelta(seconds=task_defaults["retry_delay_seconds"]),
+        # A TaskGroup's default_args win over the DAG's, so put the DAG's back on top.
+        **dict(dag.default_args or {}),
+        **dict(group_kwargs.pop("default_args", None) or {}),
+    }
 
-    CREATED.append(dag_id)
-    return DbtDag(
-        dag_id=dag_id,
-        schedule=schedule,
-        start_date=start_date,
-        tags=tags,
+    group = DbtTaskGroup(
+        group_id=group_id,
         default_args=default_args,
         project_config=project_config(project),
         profile_config=profile_config(),
@@ -156,5 +170,7 @@ def dbt_dag(
             select=list(select),
             exclude=list(exclude),
         ),
-        **dag_kwargs,
+        **group_kwargs,
     )
+    CREATED.append((dag.dag_id, group.group_id))
+    return group
