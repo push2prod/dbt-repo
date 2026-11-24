@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
 import sys
 import textwrap
@@ -161,19 +160,11 @@ def test_factory_dir_must_stay_in_repo(tmp_path: Path, value: str) -> None:
         load_config(src)
 
 
-@pytest.mark.parametrize(
-    ("config", "error"),
-    [
-        ("dags: {task_defaults: {retries: -1}}", "dags.task_defaults.retries must be a whole number"),
-        ("dags: {task_defaults: {retries: 'two'}}", "dags.task_defaults.retries must be a whole number"),
-        ("dags: {task_defaults: {start_date: '2024-01-01'}}", "unknown key dags.task_defaults.'start_date'"),
-        # The pre-task-group key: DAG-level defaults now live in the DAG files.
-        ("dags: {defaults: {retries: 1}}", "unknown key dags.'defaults'"),
-    ],
-)
-def test_task_defaults_validated(tmp_path: Path, config: str, error: str) -> None:
-    src = repo(tmp_path, {"projects/a": project("a")}, {CONFIG_FILE: config + "\n"})
-    with pytest.raises(ConfigError, match=re.escape(error)):
+@pytest.mark.parametrize("key", ["defaults", "task_defaults"])
+def test_removed_dag_defaults_keys_fail_clearly(tmp_path: Path, key: str) -> None:
+    """DAG settings moved to the DAG files; an old config must say so, not be ignored."""
+    src = repo(tmp_path, {"projects/a": project("a")}, {CONFIG_FILE: f"dags: {{{key}: {{retries: 1}}}}\n"})
+    with pytest.raises(ConfigError, match=f"dags.{key} was removed.*belong in the DAG file"):
         load_config(src)
 
 

@@ -107,10 +107,12 @@ Project setup:
       )
       EmptyOperator(task_id="start") >> campaigns >> EmptyOperator(task_id="end")
   ```
-  A DAG can hold several groups, from the same or different projects. The dbt
-  tasks' `retries` / `retry_delay` default to `dags.task_defaults` in
-  `infra/dbt_bundle.yml` (1 retry after 60s); the DAG's `default_args` override
-  that, and the group's `default_args` override both. Any other
+  A DAG can hold several groups, from the same or different projects. All DAG
+  settings (schedule, start_date, catchup, tags, `default_args` such as
+  retries) live in the DAG file; `infra/dbt_bundle.yml` has none. The group's
+  tasks inherit the DAG's `default_args`; a group's own `default_args` override
+  them for that group. Recommended for dbt tasks: `retries: 1` (a task pod that
+  starts right after a deploy clones the new revision; the retry runs on it). Any other
   `DbtTaskGroup`/`TaskGroup` argument (`operator_args`, `tooltip` ...) is passed
   through. Keep the word "Airflow" in the file (a comment is enough): Airflow's
   safe mode skips `.py` files that don't contain both "airflow" and "dag".

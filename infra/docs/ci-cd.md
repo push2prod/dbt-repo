@@ -79,10 +79,10 @@ points the generator at another file. Unknown keys, wrong types and an invalid
   temp dir, where `../../packages/x` doesn't resolve), so the generator refuses it then.
 * `dags`: `dir`, the DAG folder (git-sync `subPath`); `factory_dir`, the DAG factory
   package (default `utils/dbt_factory`, imported by that dotted path; the registry is
-  written into it); `task_defaults` (`retries`, `retry_delay_seconds`) for the dbt
-  tasks of every `dbt_task_group(...)`. Both paths must stay inside the repo.
-  DAG-level settings (schedule, start_date, catchup, tags ...) are not in the
-  config: the DAG files set them, since the factory builds task groups, not DAGs.
+  written into it). Both paths must stay inside the repo. There are no DAG
+  settings in the config: schedule, start_date, catchup, retries, tags ... are
+  set in the DAG files, since the factory builds task groups, not DAGs. An old
+  config with `dags.defaults` or `dags.task_defaults` fails with an error saying so.
 
 ## Manifest generation (`infra/manifest/`)
 
@@ -135,11 +135,12 @@ python -m infra.manifest.generate --out <overlay> --project <name>   # one proje
   mode, the shipped manifest's path, dbt from the venv as a subprocess
   (`DBT_EXECUTABLE`), `install_dbt_deps` per `dbt_packages`, the profile from the
   Airflow connection (`profile.mapping`). Everything else is a normal
-  `DbtTaskGroup` argument. The group's tasks default to `dags.task_defaults`
-  (`retries: 1` after 60s: the retry covers a task pod that starts just after a
-  deploy and clones the new revision); the DAG's `default_args` override that
-  (a TaskGroup's `default_args` would otherwise win over the DAG's), and the
-  group's own `default_args` override both. Called outside a DAG it raises.
+  `DbtTaskGroup` argument, passed as-is. The group's tasks inherit the DAG's
+  `default_args`; a group's own `default_args` override them for its tasks.
+  Recommended in every DAG with dbt tasks: `default_args={"retries": 1, ...}`.
+  With the KubernetesExecutor a task pod that starts just after a deploy clones
+  the new revision; the retry re-parses and runs on it, and dbt rebuilds models
+  whole, so it is safe. Called outside a DAG it raises.
 
 ## CI/CD
 

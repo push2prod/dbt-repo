@@ -18,9 +18,9 @@ need it with ``dbt_task_group`` (a Cosmos ``DbtTaskGroup``), between any other t
         start >> campaigns >> EmptyOperator(task_id="end")
 
 A DAG can hold several groups, from the same or different projects. The DAG
-itself (schedule, start_date, catchup, tags ...) is the DAG file's business;
-the factory only sets the dbt tasks' retry default (infra/dbt_bundle.yml
-`dags.task_defaults`), under the DAG's own ``default_args``. Keep "airflow"
+and its settings (schedule, start_date, catchup, tags, ``default_args`` such as
+retries) are the DAG file's business: the group's tasks inherit the DAG's
+``default_args`` like any other task. Keep "airflow"
 somewhere in the file (the comment above does it): Airflow's safe mode skips
 files without both "airflow" and "dag". CI fails on a group that doesn't end up
 in a collected DAG (infra/checks/test_dag_integrity.py). Any other
@@ -61,7 +61,6 @@ import importlib
 import json
 import os
 from collections.abc import Sequence
-from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -136,9 +135,8 @@ def dbt_task_group(
     ``dag=``). ``group_id`` must be unique within the DAG and prefixes the
     group's task ids (``<group_id>.<model>_run``).
 
-    The dbt tasks' ``retries`` / ``retry_delay`` default to infra/dbt_bundle.yml
-    `dags.task_defaults`. The DAG's ``default_args`` override those, and this
-    call's ``default_args`` override both. Everything else (``operator_args``,
+    The group's tasks inherit the DAG's ``default_args`` (retries, owner ...).
+    Every other argument (``default_args`` for this group only, ``operator_args``,
     ``tooltip``, ``prefix_group_id`` ...) goes to ``DbtTaskGroup`` as-is.
     """
     dag = group_kwargs.get("dag") or DagContext.get_current_dag()
@@ -147,18 +145,8 @@ def dbt_task_group(
             f"dbt_task_group({project!r}, group_id={group_id!r}) must be called inside a DAG "
             "(`with DAG(...):`, an @dag function) or be given dag="
         )
-    task_defaults = dict(registry()["task_defaults"])
-    default_args = {
-        "retries": task_defaults["retries"],
-        "retry_delay": timedelta(seconds=task_defaults["retry_delay_seconds"]),
-        # A TaskGroup's default_args win over the DAG's, so put the DAG's back on top.
-        **dict(dag.default_args or {}),
-        **dict(group_kwargs.pop("default_args", None) or {}),
-    }
-
     group = DbtTaskGroup(
         group_id=group_id,
-        default_args=default_args,
         project_config=project_config(project),
         profile_config=profile_config(),
         execution_config=ExecutionConfig(

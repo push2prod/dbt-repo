@@ -26,10 +26,16 @@ with DAG(
     max_active_runs=1,
     tags=["dbt", "example"],
     description="Example: the daily models of the sample dbt project, between two other tasks",
-    # Applies to every task in the DAG, the dbt tasks included. The dbt tasks
-    # default to infra/dbt_bundle.yml `dags.task_defaults` (retries: 1, 60s delay);
-    # whatever the DAG sets here wins over those.
-    default_args={"owner": "data"},
+    # Applies to every task in the DAG, the dbt tasks included. All DAG settings
+    # live here, in the DAG file (infra/dbt_bundle.yml has none).
+    default_args={
+        "owner": "data",
+        # Recommended for dbt tasks: one retry. With the KubernetesExecutor a task
+        # pod that starts right after a deploy clones the new revision; a retry
+        # re-parses and runs on it. dbt rebuilds models whole, so retrying is safe.
+        "retries": 1,
+        "retry_delay": timedelta(seconds=60),
+    },
 ) as dag:
     start = EmptyOperator(task_id="start")
 
@@ -42,8 +48,7 @@ with DAG(
         # selects exactly what `dbt ls` does (infra/checks/test_selector_parity.py).
         select=["tag:daily"],
         exclude=["tag:deprecated"],
-        # Overrides for this group's tasks only; they win over the DAG's default_args
-        # and over dags.task_defaults:
+        # Overrides for this group's tasks only; they win over the DAG's default_args:
         default_args={"retries": 2, "retry_delay": timedelta(minutes=5)},
         # Any other DbtTaskGroup / TaskGroup argument is passed through, e.g. extra
         # arguments for every dbt operator in the group:

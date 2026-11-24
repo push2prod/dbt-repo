@@ -50,16 +50,6 @@ DEFAULTS: dict[str, Any] = {
         # (utils/dbt_factory -> `from utils.dbt_factory import dbt_task_group`), with the repo
         # root on PYTHONPATH. The generated registry projects.json is written into it.
         "factory_dir": "utils/dbt_factory",
-        # Defaults for the dbt tasks of every dbt_task_group(...). The DAG's own
-        # default_args and the group's default_args override them. DAG-level settings
-        # (schedule, start_date, catchup, tags ...) belong in the DAG file.
-        "task_defaults": {
-            # One retry covers the KubernetesExecutor parse/run skew: a pod that starts
-            # just after a deploy clones the new revision. dbt materializations are
-            # rebuilt whole, so a retry is safe.
-            "retries": 1,
-            "retry_delay_seconds": 60,
-        },
     },
 }
 
@@ -132,6 +122,13 @@ def load_config(source: Path, path: Path | None = None) -> Config:
             raise ConfigError(f"{path}: must be a mapping")
     elif path != source / CONFIG_FILE:
         raise ConfigError(f"config file not found: {path}")
+    dags = raw.get("dags")
+    for key in ("defaults", "task_defaults"):
+        if isinstance(dags, dict) and key in dags:
+            raise ConfigError(
+                f"{CONFIG_FILE}: dags.{key} was removed. DAG settings (schedule, start_date, catchup, "
+                "retries, tags ...) belong in the DAG file: the DAG's arguments and its default_args"
+            )
     merged = _merge(DEFAULTS, raw)
     if merged["dbt_packages"] not in ("install", "ship"):
         raise ConfigError(f"{CONFIG_FILE}: dbt_packages must be 'install' or 'ship', not {merged['dbt_packages']!r}")
@@ -139,9 +136,6 @@ def load_config(source: Path, path: Path | None = None) -> Config:
         value = merged["dags"][key]
         if not isinstance(value, str) or not value or Path(value).is_absolute() or ".." in Path(value).parts:
             raise ConfigError(f"{CONFIG_FILE}: dags.{key} must be a path inside the repo, not {value!r}")
-    for key, value in merged["dags"]["task_defaults"].items():
-        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-            raise ConfigError(f"{CONFIG_FILE}: dags.task_defaults.{key} must be a whole number >= 0, not {value!r}")
     return Config(source=source.resolve(), raw=merged)
 
 

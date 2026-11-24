@@ -40,9 +40,5 @@ dags:
   # (`from utils.dbt_factory import dbt_task_group`): Airflow has the repo root on PYTHONPATH
   # (infra/airflow/values.yaml). The generated projects.json is written into it.
   factory_dir: utils/dbt_factory
-  # Defaults for the dbt tasks of every dbt_task_group(...); the DAG's default_args
-  # and the group's default_args override them. The DAG itself (schedule,
-  # start_date, catchup, tags ...) is set in the DAG file.
-  task_defaults:
-    retries: 1                     # covers a task pod that starts just after a deploy
-    retry_delay_seconds: 60
+  # DAG settings (schedule, start_date, catchup, retries, tags ...) are not
+  # configured here: each DAG file sets them on its DAG and its default_args.
