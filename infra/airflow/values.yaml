@@ -5,8 +5,8 @@ executor: KubernetesExecutor
 
 images:
   airflow:
-    # Image = Airflow 2.10.5 + astronomer-cosmos 1.10.1 (requirements/airflow-image.txt)
-    # plus a separate venv with requirements/dbt.txt at /opt/dbt-venv.
+    # Image = Airflow 2.10.5 + astronomer-cosmos 1.10.1 (infra/requirements/airflow-image.txt)
+    # plus a separate venv with infra/requirements/dbt.txt at /opt/dbt-venv.
     repository: your-registry/airflow-dbt
     tag: "2.10.5-cosmos1.10.1-dbt1.11.17"
 
@@ -89,7 +89,7 @@ workers:
   # With the KubernetesExecutor this is the task *pod* spec: one pod per Cosmos
   # task, i.e. one dbt invocation. Each task parses its project in full: no
   # partial_parse.msgpack is shipped (dags/dbt_factory sets partial_parse=False).
-  # The dbt profile comes from the Airflow connection in dbt_bundle.yml.
+  # The dbt profile comes from the Airflow connection in infra/dbt_bundle.yml.
   resources:
     # dbt tasks are the CPU-heavy part. Size here, not on the processor.
     requests:

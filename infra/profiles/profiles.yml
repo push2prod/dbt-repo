@@ -1,8 +1,8 @@
 # Dummy profile for CI only: `dbt parse`, `dbt ls` and `dbt compile` don't
 # connect to the warehouse. Airflow tasks don't use this file: Cosmos builds the
-# profile from the Airflow connection in dbt_bundle.yml (profile.mapping).
-# The profile name and target must match dbt_bundle.yml (profile.name / target),
-# and `type` must be the adapter in requirements/dbt.txt.
+# profile from the Airflow connection in infra/dbt_bundle.yml (profile.mapping).
+# The profile name and target must match infra/dbt_bundle.yml (profile.name / target),
+# and `type` must be the adapter in infra/requirements/dbt.txt.
 dbt:
   target: prod
   outputs:

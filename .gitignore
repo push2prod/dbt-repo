@@ -219,5 +219,5 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# deploy tree built by ci/build.py
+# generated overlay, deploy tree and previous deploy checkout (CI and local runs)
 build/

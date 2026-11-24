@@ -1,7 +1,7 @@
-# Layout of this repo for manifest.generate (and, through the generated
+# Layout of this repo for infra.manifest.generate (and, through the generated
 # dags/dbt_factory/projects.json, for the Airflow DAG factory and the CI checks).
-# Every path is relative to the repo root. Every key is optional; the values
-# below are the defaults (manifest/config.py).
+# Every path is relative to the repo root (not to this file). Every key is
+# optional; the values below are the defaults (infra/manifest/config.py).
 
 projects:
   # Directories holding a dbt_project.yml. "**" is allowed, e.g. "teams/**".
@@ -16,7 +16,7 @@ profile:
   name: dbt
   target: prod
   # Dummy profiles.yml for `dbt parse` / `dbt ls` / `dbt compile` in CI. Not deployed.
-  ci_profiles_dir: profiles
+  ci_profiles_dir: infra/profiles
   # What Airflow tasks use: Cosmos builds the profile from this Airflow connection.
   mapping:
     class: cosmos.profiles.PostgresUserPasswordProfileMapping
@@ -26,7 +26,7 @@ profile:
     profile_args: {}
 
 # Env for `dbt parse` in CI: values for env_var() calls in the projects. Optional.
-parse_env: manifest/parse.env
+parse_env: infra/manifest/parse.env
 
 # The deploy commit is this repo's tree plus, next to each project's dbt_project.yml:
 #   target/manifest.json, and with `ship` also dbt_packages/ (built in CI, so tasks

@@ -1,7 +1,8 @@
-"""The bundle config (``dbt_bundle.yml``) and project discovery.
+"""The bundle config (``infra/dbt_bundle.yml``) and project discovery.
 
-Every path in the config is relative to ``--source`` (the repo root in CI).
-A missing config file means all defaults.
+The config file is ``<source>/infra/dbt_bundle.yml`` unless ``--config`` names another.
+Every path *in* it is relative to ``--source`` (the repo root in CI), not to the file.
+A missing default config file means all defaults.
 """
 
 from __future__ import annotations
@@ -13,9 +14,9 @@ from typing import Any
 
 import yaml
 
-from manifest.files import SKIP_DIRS, local_package_dirs
+from infra.manifest.files import SKIP_DIRS, local_package_dirs
 
-CONFIG_FILE = "dbt_bundle.yml"
+CONFIG_FILE = "infra/dbt_bundle.yml"  # relative to the source
 
 DEFAULTS: dict[str, Any] = {
     "projects": {
@@ -28,7 +29,7 @@ DEFAULTS: dict[str, Any] = {
         # `ci_profiles_dir`; at runtime Cosmos builds the profile from `mapping`.
         "name": "dbt",
         "target": "prod",
-        "ci_profiles_dir": "profiles",
+        "ci_profiles_dir": "infra/profiles",
         "mapping": {
             "class": "cosmos.profiles.PostgresUserPasswordProfileMapping",
             "conn_id": "dbt_warehouse",
@@ -36,7 +37,7 @@ DEFAULTS: dict[str, Any] = {
         },
     },
     # Env for `dbt parse` in CI: values for env_var() calls in the projects. Optional.
-    "parse_env": "manifest/parse.env",
+    "parse_env": "infra/manifest/parse.env",
     # What the deploy commit adds next to each project's target/manifest.json:
     #   ship:    the project's dbt_packages/, built in CI; no `dbt deps` at runtime.
     #   install: nothing; Cosmos runs `dbt deps` in every task (needs network to the

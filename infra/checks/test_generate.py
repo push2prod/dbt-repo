@@ -1,4 +1,4 @@
-"""manifest.generate on small repos it builds in a temp dir.
+"""infra.manifest.generate on small repos it builds in a temp dir.
 
 * Discovery and layout validation (no dbt): the errors a broken layout must
   raise instead of silently shipping a bundle without some project.
@@ -12,15 +12,15 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import sys
 import textwrap
 from pathlib import Path
 
 import pytest
+import yaml
 
-from manifest.config import ConfigError, discover, load_config
+from infra.manifest.config import CONFIG_FILE, DEFAULTS, ConfigError, discover, load_config
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -72,7 +72,7 @@ def repo(tmp_path: Path, projects: dict[str, dict[str, str]], extra: dict[str, s
     """A source dir: ``projects`` maps a project path to its files."""
     src = tmp_path / "src"
     factory = (REPO / "dags/dbt_factory/__init__.py").read_text()
-    files = {"profiles/profiles.yml": PROFILES, "dags/dbt_factory/__init__.py": factory, **(extra or {})}
+    files = {"infra/profiles/profiles.yml": PROFILES, "dags/dbt_factory/__init__.py": factory, **(extra or {})}
     for path, pfiles in projects.items():
         files.update({f"{path}/{k}": v for k, v in pfiles.items()})
         name = next(line.split(":", 1)[1].strip() for line in pfiles["dbt_project.yml"].splitlines())
@@ -96,7 +96,7 @@ def test_nested_layout_named_by_dbt_project(tmp_path: Path) -> None:
         {"teams/x/core_dir": project("x_core", ["../../../shared/macros"]), "teams/y/sales": project("y_sales")},
         {
             "shared/macros/dbt_project.yml": "name: macros\nversion: '1.0'\nprofile: other\n",
-            "dbt_bundle.yml": "projects:\n  include: ['**']\ndbt_packages: ship\n",
+            CONFIG_FILE: "projects:\n  include: ['**']\ndbt_packages: ship\n",
         },
     )
     found = discover(load_config(src))
@@ -110,7 +110,7 @@ def test_build_output_and_installed_packages_are_skipped(tmp_path: Path) -> None
         tmp_path,
         {"projects/a": project("a")},
         {
-            "dbt_bundle.yml": "projects:\n  include: ['**']\n",
+            CONFIG_FILE: "projects:\n  include: ['**']\n",
             "projects/a/dbt_packages/dep/dbt_project.yml": "name: dep\n",
             "build/bundle/projects/a/dbt_project.yml": "name: a\n",
         },
@@ -121,13 +121,13 @@ def test_build_output_and_installed_packages_are_skipped(tmp_path: Path) -> None
 @pytest.mark.parametrize(
     ("projects", "extra", "error"),
     [
-        ({"projects/a": project("a"), "other/a": project("a")}, {"dbt_bundle.yml": "projects: {include: ['*/*']}"}, "is used by"),
+        ({"projects/a": project("a"), "other/a": project("a")}, {CONFIG_FILE: "projects: {include: ['*/*']}"}, "is used by"),
         ({"projects/a": project("a", profile="a")}, {}, "uses profile 'a'"),
         ({"projects/a": project("a", extra="target-path: out\n")}, {}, "target-path"),
         ({"projects/a": project("a", ["../../../elsewhere"])}, {}, "outside the source dir"),
         (
             {"projects/a": project("a", ["../../packages/p"])},
-            {"packages/p/dbt_project.yml": "name: p\n", "dbt_bundle.yml": "dbt_packages: install\n"},
+            {"packages/p/dbt_project.yml": "name: p\n", CONFIG_FILE: "dbt_packages: install\n"},
             "set `dbt_packages: ship`",
         ),
     ],
@@ -140,16 +140,23 @@ def test_layout_errors(tmp_path: Path, projects: dict[str, dict[str, str]], extr
 
 
 def test_unknown_config_key(tmp_path: Path) -> None:
-    src = repo(tmp_path, {"projects/a": project("a")}, {"dbt_bundle.yml": "profile: {targte: prod}\n"})
+    src = repo(tmp_path, {"projects/a": project("a")}, {CONFIG_FILE: "profile: {targte: prod}\n"})
     with pytest.raises(ConfigError, match="unknown key profile.'targte'"):
         load_config(src)
+
+
+def test_repo_config_is_valid_and_matches_defaults() -> None:
+    """infra/dbt_bundle.yml documents the defaults: it must load, and equal config.DEFAULTS."""
+    raw = yaml.safe_load((REPO / CONFIG_FILE).read_text())
+    assert load_config(REPO).raw == DEFAULTS
+    assert raw == DEFAULTS, "infra/dbt_bundle.yml and infra/manifest/config.py DEFAULTS disagree"
 
 
 # --- generate + reuse (runs dbt) ------------------------------------------
 
 
 def generate(src: Path, out: Path, previous: Path | None = None) -> dict[str, str]:
-    cmd = [sys.executable, "-m", "manifest.generate", "--source", str(src), "--out", str(out)]
+    cmd = [sys.executable, "-m", "infra.manifest.generate", "--source", str(src), "--out", str(out)]
     if previous:
         cmd += ["--previous", str(previous)]
     env = {**os.environ, "PYTHONPATH": str(REPO), "PYTHONDONTWRITEBYTECODE": "1"}
@@ -165,7 +172,7 @@ def files_in(root: Path) -> list[str]:
 
 def test_install_mode_overlay_is_only_manifests(tmp_path: Path) -> None:
     src = repo(tmp_path, {"projects/a": project("a"), "teams/t/b": project("b")})
-    (src / "dbt_bundle.yml").write_text("projects:\n  include: ['projects/*', 'teams/*/*']\ndbt_packages: install\n")
+    (src / CONFIG_FILE).write_text("projects:\n  include: ['projects/*', 'teams/*/*']\ndbt_packages: install\n")
     out = tmp_path / "overlay"
     assert generate(src, out) == {"a": "built", "b": "built"}
     assert files_in(out) == [

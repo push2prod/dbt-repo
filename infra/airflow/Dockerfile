@@ -4,8 +4,8 @@
 FROM apache/airflow:2.10.5-python3.12
 
 ARG AIRFLOW_CONSTRAINTS=https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.12.txt
-# Build from the repo root: docker build -f deploy/airflow/Dockerfile .
-COPY requirements/airflow-image.txt requirements/dbt.txt /tmp/requirements/
+# Build from the repo root: docker build -f infra/airflow/Dockerfile .
+COPY infra/requirements/airflow-image.txt infra/requirements/dbt.txt /tmp/requirements/
 RUN pip install --no-cache-dir -r /tmp/requirements/airflow-image.txt --constraint "${AIRFLOW_CONSTRAINTS}"
 
 USER root

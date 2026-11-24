@@ -1,8 +1,8 @@
 """Build the deploy overlay: the generated files the deploy commit adds to a source commit.
 
-    python -m manifest.generate --out overlay/ [--source .] [--config dbt_bundle.yml]
+    python -m infra.manifest.generate --out overlay/ [--source .] [--config infra/dbt_bundle.yml]
                                 [--previous deploy-checkout/] [--project NAME ...] [--no-reuse]
-    python -m manifest.generate --list [--source .] [--config dbt_bundle.yml]
+    python -m infra.manifest.generate --list [--source .] [--config infra/dbt_bundle.yml]
 
 The `deploy` branch is the source commit as-is (``git archive``), with this
 overlay copied on top. Every generated file sits in place, next to what it
@@ -16,7 +16,7 @@ belongs to:
     <out>.summary.json                        built / reused per project, + what the CI checks
                                               need (outside the overlay, never deployed)
 
-The layout comes from ``dbt_bundle.yml`` in ``--source`` (manifest/config.py has
+The layout comes from ``infra/dbt_bundle.yml`` in ``--source`` (infra/manifest/config.py has
 every key and its default). The DAG factory and the CI checks read projects.json
 instead of assuming a layout.
 
@@ -43,11 +43,12 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from manifest.config import Config, ConfigError, Project, discover, load_config
-from manifest.dbtvenv import check_pins, deps_and_parse
-from manifest.files import copy_sources, dereference_symlinks, input_hash, load_env_file
+from infra.manifest.config import CONFIG_FILE, Config, ConfigError, Project, discover, load_config
+from infra.manifest.dbtvenv import check_pins, deps_and_parse
+from infra.manifest.files import copy_sources, dereference_symlinks, input_hash, load_env_file
 
-REPO = Path(__file__).resolve().parent.parent
+INFRA = Path(__file__).resolve().parents[1]  # this tooling: infra/manifest, infra/requirements
+DBT_REQUIREMENTS = INFRA / "requirements" / "dbt.txt"
 REGISTRY = "projects.json"
 
 
@@ -61,11 +62,11 @@ def _digest(path: Path) -> str:
 
 def global_inputs(config: Config, dbt_core: str) -> dict[str, str]:
     """Inputs that affect every project. A change here re-parses everything."""
-    generator = "".join(_digest(p) for p in sorted((REPO / "manifest").glob("*.py")))
+    generator = "".join(_digest(p) for p in sorted((INFRA / "manifest").glob("*.py")))
     profile = config.profile
     return {
         "dbt_core": dbt_core,
-        "requirements": _digest(REPO / "requirements" / "dbt.txt"),
+        "requirements": _digest(DBT_REQUIREMENTS),
         "parse_env": _digest(config.parse_env) if config.parse_env else "-",
         "ci_profiles": _digest(config.ci_profiles_dir / "profiles.yml"),
         "profile": f"{profile['name']}/{profile['target']}",
@@ -158,7 +159,7 @@ def generate(
     if not profiles_yml.is_file():
         raise ConfigError(f"CI profile not found: {profiles_yml} (profile.ci_profiles_dir)")
 
-    dbt_core = check_pins(REPO / "requirements" / "dbt.txt")
+    dbt_core = check_pins(DBT_REQUIREMENTS)
     env = load_env_file(config.parse_env) if config.parse_env and config.parse_env.is_file() else {}
     extra = global_inputs(config, dbt_core)
     before = previous_hashes(config, previous) if reuse else {}
@@ -191,8 +192,8 @@ def generate(
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--source", type=Path, default=Path("."), help="repo root holding dbt_bundle.yml (default: .)")
-    ap.add_argument("--config", type=Path, help="config file (default: <source>/dbt_bundle.yml; missing = defaults)")
+    ap.add_argument("--source", type=Path, default=Path("."), help="repo root: the dbt content and infra/dbt_bundle.yml (default: .)")
+    ap.add_argument("--config", type=Path, help="config file (default: <source>/infra/dbt_bundle.yml; missing = defaults)")
     ap.add_argument("--out", type=Path, help="overlay directory to write (replaced)")
     ap.add_argument("--previous", type=Path, help="a checkout of the deploy branch (or an earlier overlay)")
     ap.add_argument("--project", action="append", help="build only this project (repeatable; for local use)")
@@ -201,7 +202,7 @@ def main() -> None:
     args = ap.parse_args()
     try:
         config = load_config(args.source.resolve(), args.config.resolve() if args.config else None)
-        config_file = args.config.resolve() if args.config else config.source / "dbt_bundle.yml"
+        config_file = args.config.resolve() if args.config else config.source / CONFIG_FILE
         log(f"source: {config.source}  config: {config_file}{'' if config_file.is_file() else ' (not found: defaults)'}")
         if args.list:
             projects = discover(config, skip=[args.out] if args.out else [])

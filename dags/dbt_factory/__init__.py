@@ -1,4 +1,4 @@
-"""Build Cosmos DAGs for the dbt projects in the registry (projects.json, written by manifest.generate).
+"""Build Cosmos DAGs for the dbt projects in the registry (projects.json, written by infra.manifest.generate).
 
 DAG files are written by hand and call ``dbt_dag`` once per DAG:
 
@@ -15,7 +15,7 @@ DAG files are written by hand and call ``dbt_dag`` once per DAG:
 Assign the result to a module-level name: Airflow only picks up DAGs it finds
 in the file's globals. Keep "airflow" somewhere in the file (the comment above
 does it): Airflow's safe mode skips files without both "airflow" and "dag". CI
-fails on either mistake (ci/checks/test_dag_integrity.py). Any other ``DbtDag``/``DAG`` argument (description,
+fails on either mistake (infra/checks/test_dag_integrity.py). Any other ``DbtDag``/``DAG`` argument (description,
 callbacks, ``operator_args``, ``default_args`` ...) is passed through.
 
 The deploy branch is the source tree plus the generated files, each in place:
@@ -117,7 +117,7 @@ def dbt_dag(
 ) -> DbtDag:
     """One Cosmos DAG for ``project`` (its dbt `name:`), running the nodes ``select``/``exclude`` pick.
 
-    Defaults (dbt_bundle.yml `dags.defaults`): start_date, catchup,
+    Defaults (infra/dbt_bundle.yml `dags.defaults`): start_date, catchup,
     max_active_runs, tags, retries, retry_delay_seconds. Pass any of them, or any
     other DbtDag/DAG argument, to override. ``default_args`` is merged with the
     retry defaults; ``tags`` gets ``dbt:<project>`` appended.

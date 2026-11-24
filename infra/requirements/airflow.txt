@@ -1,6 +1,6 @@
 # Airflow side for CI checks (DAG import, selector parity). Same pins as the image.
 # Install with Airflow's constraints:
-#   pip install -r requirements/airflow.txt \
+#   pip install -r infra/requirements/airflow.txt \
 #     -c https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.12.txt
 -r airflow-image.txt
 pyyaml>=6

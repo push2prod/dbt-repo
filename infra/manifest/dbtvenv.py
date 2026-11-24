@@ -1,4 +1,4 @@
-"""The dbt toolchain: its own venv, pinned by requirements/dbt.txt, as on the Airflow image."""
+"""The dbt toolchain: its own venv, pinned by infra/requirements/dbt.txt, as on the Airflow image."""
 
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ def check_pins(requirements: Path) -> str:
             if have.get(name.lower()) != want:
                 bad.append(f"{name}: installed {have.get(name.lower(), '<missing>')}, pinned {want}")
     if bad:
-        sys.exit("[manifest] dbt venv does not match requirements/dbt.txt:\n  " + "\n  ".join(bad))
+        sys.exit("[manifest] dbt venv does not match infra/requirements/dbt.txt:\n  " + "\n  ".join(bad))
     return have["dbt-core"]
 
 

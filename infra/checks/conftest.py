@@ -1,10 +1,9 @@
 """Validation checks. They run against the *deploy tree*: the source commit
 with the generated overlay on top, the same files CI commits to `deploy`.
 
-    python -m manifest.generate --out build/overlay
-    mkdir build/deploy-tree && git archive HEAD | tar -x -C build/deploy-tree
-    cp -a build/overlay/. build/deploy-tree/
-    BUNDLE_DIR=build/deploy-tree SUMMARY_FILE=build/overlay.summary.json pytest
+    python -m infra.manifest.generate --out build/overlay
+    infra/scripts/assemble_deploy_tree.sh HEAD build/overlay build/deploy-tree
+    BUNDLE_DIR=build/deploy-tree SUMMARY_FILE=build/overlay.summary.json pytest -c infra/checks/pytest.ini
 """
 
 from __future__ import annotations
@@ -20,8 +19,8 @@ from typing import TYPE_CHECKING, Any, NoReturn
 
 import pytest
 
-from manifest.dbtvenv import DBT_BIN
-from manifest.files import load_env_file
+from infra.manifest.dbtvenv import DBT_BIN
+from infra.manifest.files import load_env_file
 
 if TYPE_CHECKING:
     from airflow.models.dagbag import DagBag
@@ -38,7 +37,7 @@ def _load(path: Path) -> dict[str, Any]:
     return data
 
 
-# Written by manifest.generate next to the bundle: where the registry is, and the CI profile.
+# Written by infra.manifest.generate next to the bundle: where the registry is, and the CI profile.
 SUMMARY = _load(SUMMARY_FILE)
 # projects.json in the deploy tree: project paths, profile, target. Empty when there's none.
 REGISTRY = _load(BUNDLE / SUMMARY["registry"]) if "registry" in SUMMARY else {}
@@ -49,7 +48,7 @@ DAGS_DIR = BUNDLE / REGISTRY.get("dags_dir", "dags")
 @pytest.fixture(scope="session")
 def bundle_dir() -> Path:
     if not REGISTRY:
-        pytest.exit(f"no deploy tree at {BUNDLE} (or no {SUMMARY_FILE}); see ci/checks/conftest.py", returncode=2)
+        pytest.exit(f"no deploy tree at {BUNDLE} (or no {SUMMARY_FILE}); see infra/checks/conftest.py", returncode=2)
     return BUNDLE
 
 
