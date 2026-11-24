@@ -104,10 +104,16 @@ Project setup:
           group_id="campaigns",                 # unique in the DAG; prefixes the task ids
           select=["tag:campaigns"],
           exclude=["tag:deprecated"],
+          schema="analytics_campaigns",         # optional: this group's schema (and database=...)
           default_args={"retries": 2},          # this group's tasks only
       )
       EmptyOperator(task_id="start") >> campaigns >> EmptyOperator(task_id="end")
   ```
+  `database=` (the Trino catalog) and `schema=` override `profile.mapping.profile_args`
+  of `infra/dbt_bundle.yml` for that group only (`profile_args={...}` for any
+  other profile field); other groups keep the bundle values. Models with their
+  own `schema` config land in `<schema>_<their schema>` (dbt's default
+  `generate_schema_name`).
   A DAG can hold several groups, from the same or different projects. All DAG
   settings (schedule, start_date, catchup, tags, `default_args` such as
   retries) live in the DAG file; `infra/dbt_bundle.yml` has none. The group's

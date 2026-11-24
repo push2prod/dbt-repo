@@ -182,6 +182,30 @@ python -m infra.manifest.generate --out <overlay> --project <name>   # one proje
   With the KubernetesExecutor a task pod that starts just after a deploy clones
   the new revision; the retry re-parses and runs on it, and dbt rebuilds models
   whole, so it is safe. Called outside a DAG it raises.
+* **Per-group database / schema.** `dbt_task_group(..., database=..., schema=...)`
+  overrides those keys of `profile.mapping.profile_args` for that group only
+  (`profile_args={...}` overrides any other profile field; `database`/`schema`
+  win over it). Each call builds its own ProfileConfig; the registry is never
+  changed, so other groups in the DAG keep the bundle values
+  (`infra/checks/test_factory.py`). Why this works with a CI-built manifest
+  (checked in Cosmos 1.10.1 + dbt-trino 1.11):
+  * At task time Cosmos copies the project to a temp dir, writes `profiles.yml`
+    from the group's ProfileConfig and runs dbt with `--no-partial-parse`
+    (`partial_parse=False`). dbt re-parses with *that* profile, so relation names
+    use the overridden catalog/schema. The shipped `manifest.json` (copied into
+    the temp `target/`) holds the CI dummy values (`"ci_dummy"."ci_dummy".<model>`)
+    but dbt doesn't plan a run from it; it is overwritten.
+  * At DAG parse time Cosmos uses the manifest only for the graph (nodes,
+    dependencies, selection), not for relation names. The one place the CI
+    values still matter: a selector on them (`config.schema:...`,
+    `config.database:...`) matches the manifest's dummy values, not the override.
+  * Dataset / lineage URIs: Cosmos builds them after a run from that run's
+    artifacts via OpenLineage, so they would carry the runtime catalog/schema;
+    the image doesn't install OpenLineage, so none are emitted.
+  * dbt's default `generate_schema_name`: a model without a `schema` config goes
+    to the (overridden) target schema; one with `schema: x` goes to
+    `<target schema>_x`. A custom `generate_schema_name` macro decides otherwise.
+    A model's own `database` config wins over the overridden database.
 
 ## CI/CD
 
@@ -234,6 +258,7 @@ job, and the next pipeline rebuilds from the new state.
 | `test_selector_parity` | Cosmos' Python selector disagreeing with `dbt ls`, for every dbt task group the DAG files create (e.g. `fqn:` wildcards select nothing in Cosmos) |
 | `test_generate` | layout errors not caught; an `infra/dbt_bundle.yml` that doesn't load, leaves out a setting, or names a mapping class that isn't importable; rebuilding the wrong projects (model change → 1 project, DAG file → none, shared package → its users) |
 | `test_compile` | SQL that parses but can't render, e.g. a package macro without its prefix |
+| `test_factory` | a `dbt_task_group(..., database=, schema=, profile_args=)` override that leaks into other groups or the registry, or doesn't reach the rendered profile |
 
 ## git-sync settings that matter
 

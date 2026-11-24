@@ -94,16 +94,21 @@ def project_dir(project: str) -> Path:
     return bundle_root() / projects[project]["path"]
 
 
-def profile_config() -> ProfileConfig:
-    """The shared profile: Cosmos renders it from the Airflow connection at task time."""
+def profile_config(overrides: dict[str, Any] | None = None) -> ProfileConfig:
+    """The shared profile: Cosmos renders it from the Airflow connection at task time.
+
+    ``overrides`` replace keys of `profile.mapping.profile_args` (e.g. database,
+    schema) for this ProfileConfig only; each call builds its own mapping.
+    """
     profile = registry()["profile"]
     mapping = profile["mapping"]
     module, _, cls_name = mapping["class"].rpartition(".")
     cls = getattr(importlib.import_module(module), cls_name)
+    profile_args = {**(mapping.get("profile_args") or {}), **(overrides or {})}  # copies; registry untouched
     return ProfileConfig(
         profile_name=profile["name"],
         target_name=profile["target"],
-        profile_mapping=cls(conn_id=mapping["conn_id"], profile_args=dict(mapping.get("profile_args") or {})),
+        profile_mapping=cls(conn_id=mapping["conn_id"], profile_args=profile_args),
     )
 
 
@@ -127,6 +132,9 @@ def dbt_task_group(
     *,
     select: Sequence[str] = (),
     exclude: Sequence[str] = (),
+    database: str | None = None,
+    schema: str | None = None,
+    profile_args: dict[str, Any] | None = None,
     **group_kwargs: Any,
 ) -> DbtTaskGroup:
     """A Cosmos task group running the nodes of ``project`` (its dbt `name:`) that ``select``/``exclude`` pick.
@@ -134,6 +142,12 @@ def dbt_task_group(
     Call it inside a DAG (``with DAG(...)``, an ``@dag`` function, or pass
     ``dag=``). ``group_id`` must be unique within the DAG and prefixes the
     group's task ids (``<group_id>.<model>_run``).
+
+    ``database`` (the Trino catalog) and ``schema`` override the profile's
+    values from infra/dbt_bundle.yml `profile.mapping.profile_args` for this
+    group only; ``profile_args`` overrides any other profile field the same way
+    (``database`` / ``schema`` win over it). Tasks re-parse the project at run
+    time with that profile, so models land in the overridden catalog/schema.
 
     The group's tasks inherit the DAG's ``default_args`` (retries, owner ...).
     Every other argument (``default_args`` for this group only, ``operator_args``,
@@ -148,7 +162,13 @@ def dbt_task_group(
     group = DbtTaskGroup(
         group_id=group_id,
         project_config=project_config(project),
-        profile_config=profile_config(),
+        profile_config=profile_config(
+            {
+                **(profile_args or {}),
+                **({"database": database} if database is not None else {}),
+                **({"schema": schema} if schema is not None else {}),
+            }
+        ),
         execution_config=ExecutionConfig(
             dbt_executable_path=DBT_EXECUTABLE,
             invocation_mode=InvocationMode.SUBPROCESS,

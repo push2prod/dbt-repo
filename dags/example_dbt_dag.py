@@ -48,6 +48,13 @@ with DAG(
         # selects exactly what `dbt ls` does (infra/checks/test_selector_parity.py).
         select=["tag:daily"],
         exclude=["tag:deprecated"],
+        # Where this group's models are built. Without these, the catalog and schema
+        # come from infra/dbt_bundle.yml (profile.mapping.profile_args). Each group
+        # can set its own; other groups in the DAG are unaffected. A model with its
+        # own `schema` config lands in "<this schema>_<its schema>" (dbt's default
+        # generate_schema_name), so this also moves those.
+        # database="lake",
+        schema="analytics_daily",
         # Overrides for this group's tasks only; they win over the DAG's default_args:
         default_args={"retries": 2, "retry_delay": timedelta(minutes=5)},
         # Any other DbtTaskGroup / TaskGroup argument is passed through, e.g. extra
