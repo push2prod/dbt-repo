@@ -2,6 +2,6 @@
 # CI and on the Airflow image (/opt/dbt-venv), separate from Airflow's env.
 # The manifest schema is tied to the dbt-core version; a mismatch can break it.
 dbt-core==1.11.17
-dbt-postgres==1.11.0
+dbt-trino==1.11.0
 dbt-adapters==1.24.5
 dbt-common==1.39.0

@@ -29,12 +29,12 @@ dbt:
   target: prod
   outputs:
     prod:
-      type: postgres
+      type: trino
+      method: none
       host: dummy
-      port: 5432
+      port: 8080
       user: dummy
-      password: dummy
-      dbname: dummy
+      database: dummy
       schema: dummy
       threads: 1
 """

@@ -1,6 +1,7 @@
 # dbt-repo
 
-dbt projects for **Cosmos** on **Airflow 2.10** (KubernetesExecutor, git-sync).
+dbt projects for **Cosmos** on **Airflow 2.10** (KubernetesExecutor, git-sync),
+warehouse **Trino**.
 GitLab CI runs `dbt deps` + `dbt parse` for every changed project and publishes
 the result on the `deploy` branch: the default branch's commit plus one commit
 adding, next to each project, `target/manifest.json` and `dbt_packages/`. The
@@ -123,5 +124,10 @@ Project setup:
 * **Add a project:** add its directory where `projects.include` finds it
   (`dbt_project.yml`, `packages.yml`, `package-lock.yml`; no `profiles.yml`
   needed), then a DAG file for it as above.
+* **Warehouse:** Trino. Set the Airflow connection `trino_default` (type `trino`)
+  and replace the `your_catalog` / `your_schema` placeholders in
+  `profile.mapping.profile_args` (`infra/dbt_bundle.yml`). Switching warehouses is
+  four changes (dbt adapter, dummy CI profile, Airflow provider, Cosmos mapping +
+  connection): see [infra/docs/ci-cd.md](infra/docs/ci-cd.md#warehouse-trino-and-how-to-switch).
 * **Shared macros** in local packages are called with the package prefix:
   `{{ shared_macros.cents_to_dollars('amount_cents') }}`.

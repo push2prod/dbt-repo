@@ -2,3 +2,6 @@
 # constraints. Must match the Airflow image: the CI checks import DAGs with these.
 apache-airflow==2.10.5
 astronomer-cosmos==1.10.1
+# The "trino" connection type for the warehouse connection (profile.mapping in
+# infra/dbt_bundle.yml). Version from the Airflow 2.10.5 constraints.
+apache-airflow-providers-trino==6.0.0

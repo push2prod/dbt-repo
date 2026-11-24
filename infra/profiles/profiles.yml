@@ -7,11 +7,11 @@ dbt:
   target: prod
   outputs:
     prod:
-      type: postgres
+      type: trino
+      method: none          # no auth: parse/ls/compile never open a connection
       host: ci-dummy
-      port: 5432
+      port: 8080
       user: ci-dummy
-      password: ci-dummy
-      dbname: ci-dummy
-      schema: ci-dummy
+      database: ci_dummy    # the Trino catalog
+      schema: ci_dummy
       threads: 1

@@ -17,7 +17,7 @@ runs out of CPU, misses heartbeats, and looks hung to the scheduler.
 * The `deploy` branch is the default branch's commit plus one commit that adds
   the overlay, each file in place next to its project. git-sync delivers it to Airflow.
 * Environment: Airflow 2.10.5, KubernetesExecutor, astronomer-cosmos 1.10.1,
-  dbt 1.11 in its own venv on the image.
+  dbt 1.11 (dbt-trino) in its own venv on the image; the warehouse is Trino.
 
 ## Repo layout: dbt content at the root, tooling in `infra/`
 
@@ -83,6 +83,36 @@ points the generator at another file. Unknown keys, wrong types and an invalid
   settings in the config: schedule, start_date, catchup, retries, tags ... are
   set in the DAG files, since the factory builds task groups, not DAGs. An old
   config with `dags.defaults` or `dags.task_defaults` fails with an error saying so.
+
+## Warehouse: Trino (and how to switch)
+
+The template targets **Trino**. The warehouse appears in exactly four places;
+switching to another one (e.g. back to Postgres, or Snowflake, BigQuery ...) is
+the same four changes, nothing else:
+
+| # | what | where | Trino (now) |
+|---|---|---|---|
+| 1 | dbt adapter, in the dbt venv (CI and the image) | `infra/requirements/dbt.txt` | `dbt-trino==1.11.0` (must fit the `dbt-core` / `dbt-adapters` / `dbt-common` pins) |
+| 2 | dummy CI profile (`type` = that adapter; never connects) | `infra/profiles/profiles.yml` | `type: trino`, `method: none`, dummy host/port/user/database/schema |
+| 3 | Airflow provider for the connection type | `infra/requirements/airflow-image.txt` | `apache-airflow-providers-trino==6.0.0` (from the Airflow 2.10.5 constraints) |
+| 4 | Cosmos profile mapping + Airflow connection | `infra/dbt_bundle.yml` `profile.mapping` | `cosmos.profiles.TrinoLDAPProfileMapping`, `conn_id: trino_default`, `profile_args: {database: <catalog>, schema: <schema>, http_scheme: https}` |
+
+Notes for Trino:
+
+* The Airflow connection (`trino_default`, type `trino`) supplies host, port,
+  login and password; `database` (the Trino catalog) and `schema` have no
+  connection fields, so they go in `profile_args` (the mapping requires them).
+  Replace the `your_catalog` / `your_schema` placeholders. Cosmos maps no
+  `http_scheme` from the connection and dbt-trino defaults to `http`, which the
+  Trino client refuses for password auth, hence `http_scheme: https`.
+* Other auth methods: `TrinoCertificateProfileMapping` (client cert/key paths in
+  the connection extras `certs__client_cert_path`, `certs__client_key_path`) or
+  `TrinoJWTProfileMapping` (`jwt__token` in the extras). Same `profile_args`.
+* dbt runs in its own venv, so dbt-trino's `trino` client and the provider's
+  (Airflow constraints) never have to agree.
+* Models must be valid Trino SQL. `test_compile` renders every model's Jinja in
+  CI but runs nothing against Trino, so a dialect error (e.g. Postgres-only
+  syntax) only shows up when the task runs.
 
 ## Manifest generation (`infra/manifest/`)
 
