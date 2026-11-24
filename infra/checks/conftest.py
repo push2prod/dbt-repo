@@ -8,6 +8,7 @@ with the generated overlay on top, the same files CI commits to `deploy`.
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import shutil
@@ -109,6 +110,12 @@ def dagbag(bundle_dir: Path) -> Iterator[DagBag]:
     # DAG files' fault. After this, only the DAG files' own work runs.
     import cosmos  # noqa: F401
     from airflow.models.dagbag import DagBag
+
+    # croniter runs platform.architecture() at import time, which shells out to
+    # `file`. Airflow imports it lazily (airflow.timetables._cron) for the first DAG
+    # with a cron schedule, i.e. inside the guard; platform only tolerates OSError,
+    # so the guard's AssertionError would fail the parse. Import it first.
+    importlib.import_module("croniter")
 
     def forbidden(*args: object, **kwargs: object) -> NoReturn:
         raise AssertionError(f"subprocess started at DAG parse time: {args[:1]}")
