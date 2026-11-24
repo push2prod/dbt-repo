@@ -60,7 +60,9 @@ Airflow: nothing imports `infra`, and it is outside the DAG folder.
 ## Configuration (`infra/dbt_bundle.yml`)
 
 One file describes the layout; every key is optional and defaults to the values
-shown in it (`infra/manifest/config.py`; a check fails if the two disagree). Paths
+shown in it (`infra/manifest/config.py`). A real repo changes the values (catalog,
+schema, conn_id, project globs ...); a check makes sure the file still loads,
+spells out every setting and names an importable profile mapping. Paths
 in it are relative to the repo root (`--source`), not to the file. `--config`
 points the generator at another file. Unknown keys, wrong types and an invalid
 `dbt_packages` value fail with an error naming the key:
@@ -230,7 +232,7 @@ job, and the next pipeline rebuilds from the new state.
 |---|---|
 | `test_dag_integrity` | import errors, slow files, empty DAGs, **any subprocess at parse time** (a `dbt ls` fallback), a `dbt_task_group(...)` whose DAG Airflow doesn't collect (not assigned to a module-level name, or the file skipped by safe mode), a dbt task group not in `DBT_MANIFEST` mode, without its manifest, or with no tasks |
 | `test_selector_parity` | Cosmos' Python selector disagreeing with `dbt ls`, for every dbt task group the DAG files create (e.g. `fqn:` wildcards select nothing in Cosmos) |
-| `test_generate` | layout errors not caught; `infra/dbt_bundle.yml` out of sync with the defaults; rebuilding the wrong projects (model change → 1 project, DAG file → none, shared package → its users) |
+| `test_generate` | layout errors not caught; an `infra/dbt_bundle.yml` that doesn't load, leaves out a setting, or names a mapping class that isn't importable; rebuilding the wrong projects (model change → 1 project, DAG file → none, shared package → its users) |
 | `test_compile` | SQL that parses but can't render, e.g. a package macro without its prefix |
 
 ## git-sync settings that matter

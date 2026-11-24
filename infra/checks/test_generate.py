@@ -10,12 +10,14 @@ Independent of the deploy tree under test (BUNDLE_DIR).
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import subprocess
 import sys
 import textwrap
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -168,11 +170,36 @@ def test_removed_dag_defaults_keys_fail_clearly(tmp_path: Path, key: str) -> Non
         load_config(src)
 
 
-def test_repo_config_is_valid_and_matches_defaults() -> None:
-    """infra/dbt_bundle.yml documents the defaults: it must load, and equal config.DEFAULTS."""
+def _key_paths(d: dict[str, Any], prefix: str = "") -> set[str]:
+    """Dotted paths of every key; free-form mappings (profile_args) count as one leaf."""
+    paths = set()
+    for key, value in d.items():
+        path = f"{prefix}{key}"
+        paths.add(path)
+        if isinstance(value, dict) and key != "profile_args":
+            paths |= _key_paths(value, f"{path}.")
+    return paths
+
+
+def test_repo_config_is_valid_and_complete() -> None:
+    """infra/dbt_bundle.yml loads (no unknown keys, valid values), spells out every
+    setting the generator has, and names an importable Cosmos profile mapping.
+
+    Values may differ from config.DEFAULTS: a real repo sets its own catalog,
+    schema, conn_id, project globs ...
+    """
+    from cosmos.profiles.base import BaseProfileMapping
+
+    config = load_config(REPO)  # raises ConfigError on unknown keys / invalid values
     raw = yaml.safe_load((REPO / CONFIG_FILE).read_text())
-    assert load_config(REPO).raw == DEFAULTS
-    assert raw == DEFAULTS, "infra/dbt_bundle.yml and infra/manifest/config.py DEFAULTS disagree"
+    missing = sorted(_key_paths(DEFAULTS) - _key_paths(raw))
+    assert not missing, f"{CONFIG_FILE} doesn't spell out these settings (defaults would apply silently): {missing}"
+
+    module, _, name = config.profile["mapping"]["class"].rpartition(".")
+    cls = getattr(importlib.import_module(module), name, None)
+    assert isinstance(cls, type) and issubclass(cls, BaseProfileMapping), (
+        f"profile.mapping.class {config.profile['mapping']['class']!r} is not a Cosmos profile mapping"
+    )
 
 
 # --- generate + reuse (runs dbt) ------------------------------------------
